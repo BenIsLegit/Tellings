@@ -3,7 +3,6 @@ name = "prayer-video-creator"
 description = "Makes follow-along prayer videos for the beads you are holding."
 version.workspace = true
 edition.workspace = true
-license.workspace = true
 publish.workspace = true
 
 [lib]

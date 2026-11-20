@@ -182,6 +182,12 @@ pub fn save(paths: &Paths, name: &str, doc: &Value) -> Result<Entry> {
     if name.is_empty() {
         return Err(Error::setup("A saved setup needs a name."));
     }
+    let id = slug(name);
+    // A saved setup wins over a preset of the same name. So one that starts from
+    // a preset cannot also take that preset's name: it would start from itself.
+    if doc["extends"].as_str().map(slug).as_deref() == Some(id.as_str()) {
+        return Err(Error::setup(format!("That name is taken by the setup this one starts from. Pick another, like \"My {name}\".")));
+    }
     // Make sure it is a real setup before it lands on disk.
     from_doc(&resolve(paths, doc)?)?;
     let mut doc = doc.clone();
@@ -194,7 +200,6 @@ pub fn save(paths: &Paths, name: &str, doc: &Value) -> Result<Entry> {
             ordered.insert(k.clone(), v.clone());
         }
     }
-    let id = slug(name);
     std::fs::create_dir_all(paths.setups())?;
     std::fs::write(paths.setups().join(format!("{id}.json")), serde_json::to_string_pretty(&Value::Object(ordered.clone()))? + "\n")?;
     Ok(entry(&id, Kind::Saved, &Value::Object(ordered)))
@@ -260,6 +265,18 @@ mod tests {
         assert_eq!(find(&paths, "My Joyful").unwrap().entry.id, "my-joyful");
         delete(&paths, "my-joyful").unwrap();
         assert!(find(&paths, "my-joyful").is_err());
+        let _ = std::fs::remove_dir_all(&paths.data);
+    }
+
+    #[test]
+    fn a_setup_cannot_take_the_name_of_what_it_starts_from() {
+        let paths = temp();
+        let err = save(&paths, "Luminous", &json!({ "extends": "luminous", "voice": { "name": "Bella" } })).unwrap_err().to_string();
+        assert!(err.contains("Pick another"), "{err}");
+        assert!(saved(&paths).is_empty());
+        // Any other name is fine, and so is a setup of that name that stands on its own.
+        save(&paths, "My Luminous", &json!({ "extends": "luminous" })).unwrap();
+        save(&paths, "Luminous", &json!({ "prayers": { "mysteries": "luminous" } })).unwrap();
         let _ = std::fs::remove_dir_all(&paths.data);
     }
 

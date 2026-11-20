@@ -444,6 +444,7 @@ fn run(a: Args) -> Result<i32> {
                 None => println!("  --       ElevenLabs key: none (only needed for a generated voice)"),
             }
             println!("  Videos go to:      {}", paths.output_folder().display());
+            println!("  Pictures folder:   {}", paths.pictures().display());
             println!("  Setups and speech: {}", paths.data.display());
             println!("  Kept speech:       {:.1} MB", speech::kept_bytes(&paths) as f64 / 1_048_576.0);
             if ffmpeg.is_err() || browser.is_err() {
