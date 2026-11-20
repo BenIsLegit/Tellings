@@ -108,8 +108,8 @@ impl Browser {
         let page = pages
             .iter()
             .filter(|p| p["type"] == "page")
-            .find(|p| title_contains.is_none_or(|t| p["title"].as_str().unwrap_or("").contains(t) || p["url"].as_str().unwrap_or("").contains(t)))
-            .ok_or_else(|| Error::tool(format!("No page found on port {port}.")))?;
+            .find(|p| title_contains.is_none_or(|t| p["title"].as_str().unwrap_or("") == t))
+            .ok_or_else(|| Error::tool(format!("The app's window was not found on port {port}.")))?;
         let url = page["webSocketDebuggerUrl"].as_str().ok_or_else(|| Error::tool("That page cannot be attached to."))?;
         let socket = connect(url)?;
         Ok(Browser { child: None, profile: None, socket, session: None, next_id: 0 })

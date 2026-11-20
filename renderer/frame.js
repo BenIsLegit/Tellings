@@ -35,8 +35,9 @@
    * The first video's layout, scaled to any screen. On 2076 x 2152 this returns
    * the first video's own numbers.
    * @param {any} stage
+   * @param {boolean} [pictureBeside]  true when some scene puts its picture beside the words
    */
-  function metrics(stage) {
+  function metrics(stage, pictureBeside) {
     const safe = stage.safe || { top: 0, right: 0, bottom: 0, left: 0 };
     const W = stage.width - safe.left - safe.right;
     const H = stage.height - safe.top - safe.bottom;
@@ -47,26 +48,43 @@
       const u = Math.min(W / 2076, H / 2152);
       const baseCol = 816 * u;
       const free = W - 1260 * u;
-      const colW = Math.min(free, baseCol * 1.7);
-      const ox = (free - colW) / 2;
       const oy = (H - 2152 * u) / 2;
-      m = {
-        u: u,
-        b: u,
-        t: u * Math.min(1.3, Math.sqrt(colW / baseCol)),
-        beads: { x: ox + 60 * u, y: oy + 230 * u, w: 1040 * u, h: 1657 * u },
-        col: { x: ox + 1180 * u, y: oy + 250 * u, w: colW, h: 1700 * u },
-      };
+      if (pictureBeside && W / H >= 1.45) {
+        // A wide screen has room for three things in a row: beads, words, picture.
+        const colW = free / 2 - 30 * u;
+        const sx = 1180 * u + colW + 60 * u;
+        const sw = W - sx - 80 * u;
+        const sh = Math.min(sw * 1.1, 1500 * u);
+        m = {
+          u: u,
+          b: u,
+          t: u * Math.min(1.3, Math.sqrt(colW / baseCol)),
+          beads: { x: 60 * u, y: oy + 230 * u, w: 1040 * u, h: 1657 * u },
+          col: { x: 1180 * u, y: oy + 250 * u, w: colW, h: 1700 * u },
+          side: { x: sx, y: oy + 250 * u + (1700 * u - sh) / 2, w: sw, h: sh },
+        };
+      } else {
+        const colW = Math.min(free, baseCol * 1.7);
+        const ox = (free - colW) / 2;
+        m = {
+          u: u,
+          b: u,
+          t: u * Math.min(1.3, Math.sqrt(colW / baseCol)),
+          beads: { x: ox + 60 * u, y: oy + 230 * u, w: 1040 * u, h: 1657 * u },
+          col: { x: ox + 1180 * u, y: oy + 250 * u, w: colW, h: 1700 * u },
+        };
+      }
     } else {
+      // A tall screen: beads on top, words below. The words get the bigger share.
       const u = W / 1240;
-      const top = 70 * u;
-      const bh = Math.min(H * 0.47, (W - 120 * u) / (300 / 478));
+      const top = 60 * u;
+      const bh = Math.min(H * 0.4, (W - 120 * u) / (300 / 478));
       const bw = bh * (300 / 478);
-      const colY = top + bh + 44 * u;
+      const colY = top + bh + 40 * u;
       m = {
         u: u,
         b: bw / 1040,
-        t: u * 0.92,
+        t: u * 0.74,
         beads: { x: (W - bw) / 2, y: top, w: bw, h: bh },
         col: { x: 80 * u, y: colY, w: W - 160 * u, h: H - colY - 190 * u },
       };
@@ -231,7 +249,7 @@
   function create(host, plan, opts) {
     opts = opts || {};
     const stage = plan.stage;
-    const m = metrics(stage);
+    const m = metrics(stage, plan.scenes.some(function (/** @type {any} */ s) { return s.picture && s.picture.place === "beside"; }));
     /** @type {HTMLElement | ShadowRoot} */
     const mount = opts.shadow ? host.shadowRoot || host.attachShadow({ mode: "open" }) : host;
     mount.textContent = "";
@@ -274,10 +292,17 @@
     const col = el("div", "pvc-col");
     Object.assign(col.style, { left: m.col.x + "px", top: m.col.y + "px", width: m.col.w + "px", height: m.col.h + "px" });
     const side = el("div", "pvc-side");
-    side.style.height = Math.round(m.col.h * 0.3) + "px";
     const where = el("p", "where"), title = el("h1", "title"), pips = el("div", "pips"), tag = el("p", "tag");
     const ann = el("div", "announce"), prayer = el("p", "prayer"), hint = el("p", "hint");
-    col.append(side, where, title, pips, tag, ann, prayer, hint);
+    col.append(where, title, pips, tag, ann, prayer, hint);
+    if (m.side) {
+      // Its own place, to the right of the words.
+      Object.assign(side.style, { position: "absolute", left: m.side.x + "px", top: m.side.y + "px", width: m.side.w + "px", height: m.side.h + "px" });
+    } else {
+      // No room beside: the picture sits above the words and takes part of their column.
+      side.style.height = Math.round(m.col.h * 0.3) + "px";
+      col.prepend(side);
+    }
 
     const credit = el("p", "pvc-credit"), count = el("p", "pvc-count"), track = el("div", "pvc-track"), fill = el("i");
     track.appendChild(fill);
@@ -287,6 +312,7 @@
     Object.assign(track.style, { left: pad + "px", right: pad + "px", bottom: 92 * m.u + "px" });
 
     inner.append(svg, art, center, col, credit, count, track);
+    if (m.side) inner.append(side);
     st.append(bg, inner);
     mount.appendChild(st);
 

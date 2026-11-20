@@ -94,6 +94,10 @@ pub struct Scene {
     pub picture: Option<PictureDraw>,
     pub words: Words,
     pub colors: Palette,
+    /// The picture and color settings picked for this scene, as the person set
+    /// them. The app shows these so a choice can be seen and changed.
+    pub picture_choice: Picture,
+    pub color_choice: Colors,
 
     // What is heard.
     pub voice: Voice,
@@ -469,6 +473,8 @@ pub fn build(setup: &Setup, ctx: &Context) -> Result<Plan> {
         center: Center { label: set_label.clone(), number: None, name: if set.days.is_empty() { String::new() } else { format!("Prayed on {}", set.days) } },
         picture: picture(&style, &mut warnings),
         colors: style.colors.palette(),
+            picture_choice: style.picture.clone(),
+            color_choice: style.colors.clone(),
         words: style.words,
         voice: style.voice,
         pace: style.pace,
@@ -552,6 +558,8 @@ pub fn build(setup: &Setup, ctx: &Context) -> Result<Plan> {
             center,
             picture: picture(&style, &mut warnings),
             colors: style.colors.palette(),
+            picture_choice: style.picture.clone(),
+            color_choice: style.colors.clone(),
             words: style.words,
             voice: style.voice,
             pace: style.pace,
@@ -586,6 +594,8 @@ pub fn build(setup: &Setup, ctx: &Context) -> Result<Plan> {
         center: Center { label: set_label.clone(), number: None, name: "Finished".into() },
         picture: picture(&style, &mut warnings),
         colors: style.colors.palette(),
+            picture_choice: style.picture.clone(),
+            color_choice: style.colors.clone(),
         words: style.words,
         voice: style.voice,
         pace: style.pace,

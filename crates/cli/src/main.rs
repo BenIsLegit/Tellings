@@ -176,7 +176,7 @@ fn cost_lines(est: &speech::Estimate, key: Option<secrets::KeySource>) -> Vec<St
             out.push("Credits: none. This video has no generated voice.".into());
         }
     } else {
-        out.push(format!("Credits: about {} to record {} new pieces of speech.", commas(est.letters_to_record), est.pieces_to_record));
+        out.push(format!("Credits: about {} to record {} new piece{} of speech.", commas(est.letters_to_record), est.pieces_to_record, if est.pieces_to_record == 1 { "" } else { "s" }));
         for v in &est.by_voice {
             out.push(format!("  {}: {} letters in {} pieces", v.voice, commas(v.letters), v.pieces));
         }
@@ -452,10 +452,12 @@ fn run(a: Args) -> Result<i32> {
         }
 
         // For building the app: take a picture of the running app window.
-        // Start the app with WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS=--remote-debugging-port=9222 first.
+        // Start the app with WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS=--remote-debugging-port=9347 first.
+        // It only ever attaches to this app's own window, by its title. Other
+        // programs on the computer can have a debugging port open too.
         "dev-shot" => {
-            let port: u16 = first.and_then(|p| p.parse().ok()).unwrap_or(9222);
-            let mut page = cdp::Browser::attach(port, None)?;
+            let port: u16 = first.and_then(|p| p.parse().ok()).unwrap_or(9347);
+            let mut page = cdp::Browser::attach(port, Some("Prayer Video Creator"))?;
             if let Some(script) = a.words.get(1) {
                 let script = if std::path::Path::new(script).is_file() { std::fs::read_to_string(script)? } else { script.clone() };
                 println!("{}", page.eval(&script)?);
