@@ -38,6 +38,7 @@ Every setting has a default. The exact names and choices are in [settings.md](se
 - Direction for the voice, like "reverent, unhurried", on the models that take it (Eleven v3 and v4).
 - ElevenLabs' own controls: stability, similarity, style, speaker boost, its own speed, seed, sound quality, language, and pronunciation dictionaries for a word it keeps saying wrong.
 - Two voices that take turns on the Our Father, Hail Mary and Glory Be.
+- Those two recorded together, in one go, so the answer follows on from the leader (Eleven v4 and v3). It costs the same, and each prayer is still recorded once for that pair of voices and reused.
 - Several voices that take turns leading: a new one on every prayer, or one for each decade.
 - Several recordings ("takes") of each prayer that take turns, so repeats sound less alike. Or a new recording every time a prayer is said.
 - In turn, or mixed up.
@@ -110,6 +111,7 @@ Every setting has a default. The exact names and choices are in [settings.md](se
 
 - **A real ElevenLabs voice.** The voice path was tested against a stand-in service, not a real account. The first real video is the test. Listen to it before trusting it.
 - **The newer models and controls, with real credits.** The lists (models, prices, voices, credits left) were checked against a real ElevenLabs account. Recording with a different model, a direction, a seed, high quality or a dictionary was checked against the stand-in only. Try one short prayer first and listen. A direction is the least sure: if ElevenLabs ever reads it aloud, take it out.
+- **Two voices recorded together, with real credits.** Checked against the stand-in only. ElevenLabs' pages say Eleven v4 and v3 both take this kind of request, and that waits on a real try. They do not say three things, and each was built to cope either way: whether anything sits between the two voices' words in its timings, whether a direction's letters are timed, and whether it reports what it charged. If the lit-up line ever drifts from the voice on a prayer recorded together, that is where to look. Nothing needs recording again to fix it: what ElevenLabs sent is kept.
 - **How the rooms sound.** They were checked by measuring, not by ear: the echo is there, it fades as fast as each room should, and no timing changes. Listen to one prayer in a room before you make a whole video with it.
 - **How different two takes sound.** ElevenLabs reads the same words a little differently each time it is asked. The stand-in does not, so takes were checked by count, not by ear. Try a few takes of the Hail Mary before paying for more.
 - **macOS and Linux.** Built and tested on Windows only.

@@ -104,6 +104,15 @@ The cost is letters times the model's price. Most models charge one credit a let
 
 Changing the usual model (`USUAL_MODEL` in `setup.rs`) changes how every video sounds, and records everything again. Ask first.
 
+### A second voice that answers
+
+```
+--set voice.respond=George                 George answers with the second half of the Our Father, Hail Mary and Glory Be
+--set voice.together=true                  ... and the two are recorded in one go, so the answer follows on
+```
+
+Recorded together, a prayer is one recording with both voices in it. It costs the same letters, and it is kept for that pair of voices and reused, like any other recording. Only Eleven v4 and v3 can do it. With another model the tool records the two halves one after the other, as before, and prints a `Note:` saying so.
+
 Bead names: `cross`, `p1` to `p5` (the strand, `p1` nearest the cross), `medal`, `d3b10` (decade 3, bead 10), `L2` to `L5` (the big beads in the loop), `g0` to `g5` (the chain, where the Glory Be is said).
 
 ### Useful extras
@@ -158,7 +167,7 @@ A setup is a small JSON file that holds only what differs from the defaults. The
 - **Sound sets the timing.** Each still is held for as long as its sound lasts. With no voice, the pace settings say how long.
 - **A room is added last.** `audio::master` lays a room's echo over the finished voice track, before any music. `room.rs` works the echo out from a few numbers, and FFmpeg's `afir` applies it. It touches no recording and no timing, so it costs nothing and is in no cache key. With `room.kind = none` the sound is sample for sample what it was.
 - **One gate for credits.** `make::look` is free. `make::make` stops with `NeedsApproval` unless the approved number covers the credits still to spend. That is letters times what each model charges (`Rates` in `speech.rs`, read from the list `speech::models` fetches and keeps for a day). `speech::record` is the second lock: it adds up what ElevenLabs says it charged, and stops before going over the number.
-- **Only `Client::speak` spends.** Every other call to ElevenLabs is a free list or lookup. `speak` tries again only after a "busy" answer, when nothing was recorded. Never retry it after any other failure: a recording may have been made and paid for.
+- **Only `Client::speak` and `Client::converse` spend.** `speak` records one voice, `converse` two voices as one conversation. Every other call to ElevenLabs is a free list or lookup. Both try again only after a "busy" answer, when nothing was recorded. Never retry them after any other failure: a recording may have been made and paid for.
 
 ### What has to stay in step
 
@@ -173,6 +182,8 @@ A setup is a small JSON file that holds only what differs from the defaults. The
 Setups, pictures and recorded speech live outside the repo, in the app's own folder (`%APPDATA%\gg.cathedral.prayer-video-creator` on Windows). The app and `pvc` share it.
 
 Each recording is filed under a hash of the voice, its settings and the exact words (`raw_key` in `speech.rs`). Change what goes into that hash, or one letter of a prayer, and the person pays to record it all again.
+
+Two voices recorded together (`voice.together`) are one recording, filed under a name of its own shape (`"dialogue"`, both voices, both halves), so it can never be mistaken for a piece by one voice.
 
 A setting added later joins the hash only where a setup uses it (`extras` in `speech.rs`), so everything recorded before it existed is still found. Add a new one the same way: at the end of that list, never as a JSON object (the app and `pvc` can order an object's keys differently), and pin the result in the test beside it.
 

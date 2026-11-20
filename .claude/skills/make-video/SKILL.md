@@ -43,6 +43,12 @@ A different ElevenLabs model, or direction for the voice. `pvc models` lists the
 --set "voice.direction=reverent, unhurried"              how to say it (Eleven v3 and v4 only)
 ```
 
+A second voice that answers, the way a group prays. `voice.together` records the two in one go, so the answer follows on (Eleven v4 and v3 only, same cost):
+
+```
+--set voice.respond=George --set voice.together=true
+```
+
 One recording came out wrong: `pvc rerecord <setup> [changes] --scene d1b3`, then make the video again.
 
 To check a look before making the whole video: `pvc frame <setup> --scene d3b10 --to still.png`, then open the picture.
