@@ -416,7 +416,7 @@ pub fn build(setup: &Setup, ctx: &Context) -> Result<Plan> {
     let mut missing: BTreeSet<String> = BTreeSet::new();
     let set_label = format!("{} Mysteries", set.name);
 
-    let mut picture = |style: &Style, warnings: &mut Vec<String>| -> Option<PictureDraw> {
+    let mut picture = |style: &Style, _warnings: &mut Vec<String>| -> Option<PictureDraw> {
         let p = &style.picture;
         let file = p.file.as_deref().map(str::trim).filter(|f| !f.is_empty())?;
         if !p.show {
@@ -431,9 +431,7 @@ pub fn build(setup: &Setup, ctx: &Context) -> Result<Plan> {
                 place: p.place,
             }),
             None => {
-                if missing.insert(file.to_string()) {
-                    warnings.push(format!("Picture not found: {file}. The loop of beads will hold the mystery's name there instead."));
-                }
+                missing.insert(file.to_string());
                 None
             }
         }
@@ -597,6 +595,16 @@ pub fn build(setup: &Setup, ctx: &Context) -> Result<Plan> {
         chapter: None,
         seconds: setup.pace.outro,
     });
+
+    drop(picture);
+    if !missing.is_empty() {
+        let names: Vec<&str> = missing.iter().map(String::as_str).collect();
+        warnings.push(format!(
+            "{} not found: {}. The loop of beads will hold the mystery's name there instead.",
+            if names.len() == 1 { "Picture" } else { "Pictures" },
+            names.join(", ")
+        ));
+    }
 
     let mut first_scene: BTreeMap<String, usize> = BTreeMap::new();
     for (i, sc) in scenes.iter().enumerate() {

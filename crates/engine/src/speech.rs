@@ -494,13 +494,20 @@ pub fn prepare(paths: &Paths, ffmpeg: &Path, script: &Script, mut on_done: impl 
         bases.push(Base { key, file, samples, trim_start, alignment });
     }
 
-    // Measure each voice's own pace across everything it says in this video.
+    // Measure each voice's own pace across everything it says in this video. A
+    // piece counts once for every time it is heard, so the Hail Mary, said 53
+    // times, weighs 53 times. That way the whole video lands on the pace asked for.
+    let mut uses = vec![0u64; n];
+    for part in script.scenes.iter().flatten() {
+        uses[part.clip] += 1;
+    }
     let mut natural: BTreeMap<String, (u64, f32, String)> = BTreeMap::new();
-    for (clip, base) in script.clips.iter().zip(&bases) {
+    for (i, (clip, base)) in script.clips.iter().zip(&bases).enumerate() {
         if let Source::Speech { voice, text } = &clip.source {
+            let times = uses[i].max(1);
             let e = natural.entry(format!("{}|{}", voice.tag(), voice.model)).or_insert((0, 0.0, voice.label()));
-            e.0 += letters(text);
-            e.1 += base.samples.len() as f32 / SR as f32;
+            e.0 += letters(text) * times;
+            e.1 += base.samples.len() as f32 / SR as f32 * times as f32;
         }
     }
 
