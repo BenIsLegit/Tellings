@@ -1,8 +1,18 @@
 # Pictures
 
-Put your pictures here. They stay on your computer; this folder is kept out of the repo.
+Pictures stay on your computer. They are never put in this repo.
 
-The Luminous setup looks for five files:
+## Where to put them
+
+The easy place is the app's own pictures folder. In the app, open **Pictures** and press **Open my pictures folder**. Pictures there are found by the app and by the `pvc` tool, wherever it is run from.
+
+This folder works too, but only when `pvc` is run from the top of this repo.
+
+Or skip folders: in the app, press **Choose…** beside any mystery and pick a file anywhere.
+
+## The Luminous setup
+
+It looks for five files:
 
 | File | Picture |
 | --- | --- |
@@ -12,6 +22,10 @@ The Luminous setup looks for five files:
 | `luminous-4` | Raphael, The Transfiguration (detail), 1516-20 |
 | `luminous-5` | Juan de Juanes, The Last Supper, c. 1562 |
 
-Any of `.png`, `.jpg`, `.jpeg`, `.webp` works. If a file is missing, the video still gets made. The loop of beads holds the name of the mystery instead.
+Any of `.png`, `.jpg`, `.jpeg`, `.webp` works.
 
-Use pictures you supply, or ones in the public domain. Give each one a credit line: artist, title and date.
+If a file is missing, the video still gets made. The loop of beads holds the name of the mystery instead.
+
+## Which pictures
+
+Use pictures you supply, or ones in the public domain. Give each one a credit line: artist, title and date. The credit shows on screen.

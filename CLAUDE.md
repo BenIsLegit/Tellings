@@ -2,7 +2,7 @@
 
 Read [README.md](README.md) first. It says what this is and why I want it.
 
-This file says what matters to me and why. It does not say how to build anything. That part is yours to work out, and to ask me about.
+This file says what matters to me and why. It does not say how to build anything. That part is yours to work out, and to ask me about. How the tool is put together, and how to make a video with it, is in [AGENTS.md](AGENTS.md).
 
 ## The one rule
 
@@ -91,11 +91,23 @@ If you quote Scripture, use the NLT, word for word.
 - I read slowly. Keep what you write to me short. In the videos, keep text large and leave it up long enough to read.
 - My phone is a Pixel 9 Pro Fold. The first video is sized for its inner screen, 2076 x 2152.
 
+## When I ask for a video
+
+Read [AGENTS.md](AGENTS.md). It has the steps. In short: use the `pvc` tool, show me the credit cost before spending anything, then tell me where the file is.
+
+## Versioning
+
+**Single source of truth: `package.json` `version` field.**
+
+When bumping the version, update `package.json`, `src-tauri/tauri.conf.json`, and the root `Cargo.toml` to match.
+`build.bat` produces a test build with the commit hash (e.g., `0.1.0-a1b2c3d`).
+`build.bat --release` produces a clean release build (e.g., `0.1.0`).
+
 ## Ask me first
 
 I haven't decided these. Ask instead of guessing:
 
-- What the tool is like to use: an app with buttons, a web page, or something else
+- What the tool is like to use: an app with buttons, a web page, or something else. *(Decided: a desktop app, plus the `pvc` tool so Claude Code or Codex can make a video when asked.)*
 - Which kind of beads to add after the five-decade rosary
 - Anything that would change how the first video looks or sounds
 - Anything that would spend a lot of ElevenLabs credits
