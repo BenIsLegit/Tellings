@@ -1139,9 +1139,15 @@ mod tests {
 
     #[test]
     fn a_newer_setting_changes_the_filing_only_where_it_is_used() {
-        // Kept speech is paid for. A setup that uses none of the newer settings
-        // must find its recordings exactly where they were.
-        let plain = plan(json!({}));
+        // Kept speech is paid for. A setup that names the first video's model and
+        // uses none of the newer settings must find its recordings exactly where
+        // they were.
+        let first = |more: serde_json::Value| -> Plan {
+            let mut voice = json!({ "model": crate::setup::FIRST_MODEL });
+            crate::setup::merge(&mut voice, &more);
+            plan(json!({ "voice": voice }))
+        };
+        let plain = first(json!({}));
         let hail = |p: &Plan| -> String {
             let s = script(p, &[]);
             s.clips.iter().find(|c| c.lines.first().map(String::as_str) == Some("Hail Mary, full of grace,")).unwrap().raw_key()
@@ -1160,18 +1166,24 @@ mod tests {
             json!({ "normalize": "on" }),
             json!({ "quality": "high" }),
             json!({ "dictionary": "Prayers" }),
-            json!({ "model": "eleven_v4", "direction": "reverent" }),
         ] {
-            assert!(seen.insert(hail(&plan(json!({ "voice": voice })))), "{voice} did not change where the recording is filed");
+            assert!(seen.insert(hail(&first(voice.clone()))), "{voice} did not change where the recording is filed");
         }
+        // A setup that names no model gets Eleven v4, which is a different
+        // recording again. So is a direction, for a model that takes one.
+        let usual = plan(json!({}));
+        assert_eq!(hail(&usual), hail(&plan(json!({ "voice": { "model": "eleven_v4" } }))));
+        assert_eq!(hail(&usual), hash(&json!(["speech", 2, "name:imperial - male", "eleven_v4", null, null, null, words])));
+        assert!(seen.insert(hail(&usual)));
+        assert!(seen.insert(hail(&plan(json!({ "voice": { "direction": "reverent" } })))));
         // And each is filed under a name that is pinned here, like the first video's.
-        let seeded = plan(json!({ "voice": { "seed": 7, "quality": "high", "dictionary": "Prayers" } }));
+        let seeded = first(json!({ "seed": 7, "quality": "high", "dictionary": "Prayers" }));
         assert_eq!(
             hail(&seeded),
             hash(&json!(["speech", 2, "name:imperial - male", "eleven_multilingual_v2", null, null, null, words, "with", "seed", 7, "quality", "high", "dictionaries", ["prayers"]]))
         );
         // Setting one back to what ElevenLabs does anyway is the same as leaving it out.
-        assert_eq!(hail(&plan(json!({ "voice": { "normalize": "auto", "quality": "standard" } }))), hail(&plain));
+        assert_eq!(hail(&first(json!({ "normalize": "auto", "quality": "standard" }))), hail(&plain));
     }
 
     #[test]
@@ -1195,9 +1207,11 @@ mod tests {
         assert!(directed_letters > plain_letters);
         // Tags a person wrote out are sent as they are.
         assert!(sent(json!({ "model": "eleven_v3", "direction": "[calm] [slowly]" })).0.starts_with("[calm] [slowly] Glory be"));
+        // The usual model takes direction, so a setup that names no model gets it too.
+        assert_eq!(sent(json!({ "direction": "reverent, unhurried" })).0, directed);
         // An older model would say the direction aloud, so it never gets one.
-        assert_eq!(sent(json!({ "direction": "reverent" })).0, plain);
-        let p = plan(json!({ "voice": { "direction": "reverent" } }));
+        assert_eq!(sent(json!({ "model": "eleven_multilingual_v2", "direction": "reverent" })).0, plain);
+        let p = plan(json!({ "voice": { "model": "eleven_multilingual_v2", "direction": "reverent" } }));
         let notes = notes(&temp("direction-notes"), &script(&p, &[]));
         assert!(notes.len() == 1 && notes[0].contains("does not take direction"), "{notes:?}");
     }

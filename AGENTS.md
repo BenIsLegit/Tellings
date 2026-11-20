@@ -46,7 +46,7 @@ On Windows run `.\pvc.bat`. On macOS or Linux run `./pvc`. The first run builds 
 --voice "Name"                           a voice in the person's ElevenLabs account
 --voice "Bella + George"                 several voices take turns
 --takes 5                                five recordings of each prayer take turns
---model eleven_v4                        the ElevenLabs model that speaks (see pvc models)
+--model eleven_flash_v2_5                the ElevenLabs model that speaks (see pvc models)
 --no-voice                               words on screen only, no credits
 --screen tv-1080p                        see pvc options for the sizes
 --to "C:\some\folder"                    where the files go
@@ -84,10 +84,10 @@ If one recording came out wrong, `pvc rerecord luminous --scene d1b3` throws awa
 
 ### The model, and how the voice speaks
 
-`pvc models` lists the ElevenLabs models and what each charges. It is free. The first video used `eleven_multilingual_v2`, and that stays the default.
+`pvc models` lists the ElevenLabs models and what each charges. It is free. The usual model is `eleven_v4`. The first video was recorded with `eleven_multilingual_v2`. Naming that model brings back its sound, and the recordings kept from then.
 
 ```
---model eleven_v4                                       a different model for the whole video
+--model eleven_multilingual_v2                          a different model for the whole video
 --rule "prayer=hailmary: voice.model=eleven_flash_v2_5"  ... or for part of it
 --set "voice.direction=reverent, unhurried"             how to say it. Eleven v3 and v4 only
 --set voice.stability=0.4                               ElevenLabs' own controls. See pvc options
@@ -101,7 +101,7 @@ These are voice settings, so each works for the whole video or in a rule.
 
 The cost is letters times the model's price. Most models charge one credit a letter. The Flash and Turbo ones charge half. `pvc show` works it out.
 
-Changing the model the first video uses changes how it sounds. Ask first.
+Changing the usual model (`USUAL_MODEL` in `setup.rs`) changes how every video sounds, and records everything again. Ask first.
 
 Bead names: `cross`, `p1` to `p5` (the strand, `p1` nearest the cross), `medal`, `d3b10` (decade 3, bead 10), `L2` to `L5` (the big beads in the loop), `g0` to `g5` (the chain, where the Glory Be is said).
 

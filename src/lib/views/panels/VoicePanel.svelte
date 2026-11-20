@@ -100,6 +100,29 @@
 <div data-testid="voice-panel">
   <ScopeBar />
 
+  <Group title="The ElevenLabs model" testid="voice-model-group" note="The model is what turns the words into speech. A prayer recorded with one model is recorded again, and paid for again, with another.">
+    <Setting path="voice.model" label="Model" kind="text" placeholder="eleven_v4" />
+    <div class="-mt-1 pb-2">
+      <Button size="sm" testid="voice-model-choose-btn" onclick={() => (pickingModel = true)}>Choose a model…</Button>
+      {#if modelInfo}
+        <p class="mt-1.5 text-xs leading-relaxed text-ink-muted" data-testid="voice-model-info">
+          {modelInfo.name} · {rateWords(modelInfo.creditsPerLetter)}{modelInfo.maxLetters > 0 ? ` · up to ${commas(modelInfo.maxLetters)} letters a prayer` : ""}
+        </p>
+      {:else if models.length > 0}
+        <p class="mt-1.5 text-xs leading-relaxed text-amber-400" data-testid="voice-model-unknown">ElevenLabs does not list this model. Choose one from the list.</p>
+      {/if}
+    </div>
+    {#if shows("voice.direction", modelInfo?.takesDirection)}
+      <Setting
+        path="voice.direction"
+        label="Direction"
+        kind="text"
+        placeholder="reverent, unhurried"
+        help="How to say it. Only Eleven v3 and v4 take direction. The voice does not read these words aloud. They add a few letters to the cost of each prayer."
+      />
+    {/if}
+  </Group>
+
   <Group title="The voice" testid="voice-main-group">
     <Setting path="voice.on" label="Use a voice" kind="toggle" help="Off means words on screen only. No credits are spent." />
     <Setting path="voice.name" label="Voice" kind="text" placeholder="The name of a voice in your ElevenLabs account" />
@@ -179,29 +202,6 @@
     <Setting path="voice.recording" label="Recording of the prayer" kind="file" picks="sound" />
     <Setting path="voice.announceRecording" label="Recording of the mystery's name" kind="file" picks="sound" />
     <Setting path="voice.recordingSpeed" label="Speed of your recordings" kind="number" min={0.5} max={2.5} step={0.05} unit="x" help="1 leaves them as they are. The first video's recordings were played at 1.75." />
-  </Group>
-
-  <Group title="The ElevenLabs model" testid="voice-model-group" note="The model is what turns the words into speech. A prayer recorded with one model is recorded again, and paid for again, with another.">
-    <Setting path="voice.model" label="Model" kind="text" placeholder="eleven_multilingual_v2" />
-    <div class="-mt-1 pb-2">
-      <Button size="sm" testid="voice-model-choose-btn" onclick={() => (pickingModel = true)}>Choose a model…</Button>
-      {#if modelInfo}
-        <p class="mt-1.5 text-xs leading-relaxed text-ink-muted" data-testid="voice-model-info">
-          {modelInfo.name} · {rateWords(modelInfo.creditsPerLetter)}{modelInfo.maxLetters > 0 ? ` · up to ${commas(modelInfo.maxLetters)} letters a prayer` : ""}
-        </p>
-      {:else if models.length > 0}
-        <p class="mt-1.5 text-xs leading-relaxed text-amber-400" data-testid="voice-model-unknown">ElevenLabs does not list this model. Choose one from the list.</p>
-      {/if}
-    </div>
-    {#if shows("voice.direction", modelInfo?.takesDirection)}
-      <Setting
-        path="voice.direction"
-        label="Direction"
-        kind="text"
-        placeholder="reverent, unhurried"
-        help="How to say it. Only Eleven v3 and v4 take direction. The voice does not read these words aloud. They add a few letters to the cost of each prayer."
-      />
-    {/if}
   </Group>
 
   <Group title="Fine tuning" folded testid="voice-fine-group" note="ElevenLabs' own controls. Left unset, the voice speaks the way it is set up at ElevenLabs. Changing one means that part is recorded again.">

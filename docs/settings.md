@@ -58,7 +58,7 @@ Can be set for part of the video with a rule.
 | `voice.freshEachTime` | true \| false | A new recording every time a prayer is said, so no two sound the same. Costs the most credits. Wins over takes. |
 | `voice.shuffle` | true \| false | Mix up the order of the takes and the voices, instead of going in turn. The mix is the same each time the video is made. |
 | `voice.id` | a voice id | An exact ElevenLabs voice id. Wins over the name, and leads alone. |
-| `voice.model` | a model id | The ElevenLabs model that speaks. See them, and what each costs, with: pvc models. eleven_multilingual_v2 is the first video. |
+| `voice.model` | a model id | The ElevenLabs model that speaks. See them, and what each costs, with: pvc models. eleven_v4 is the usual one. The first video was recorded with eleven_multilingual_v2. |
 | `voice.direction` | words | How to say it, like: reverent, unhurried. Only Eleven v3 and v4 take direction. It is sent as a tag the voice does not read aloud, and left out for other models. |
 | `voice.speed` | 0.4 to 2.5 | 1 is the pace of the first video. 0.8 is slower, 1.2 is faster. |
 | `voice.exactSpeedup` | 0.5 to 4 | Skip the measuring and speed the recording up by exactly this much. |
@@ -192,7 +192,7 @@ Rules: one setting for part of the video
     --rule "section=closing: words.size=1.2"
     --rule "bead=d3b10: voice.name=Sarah"
     --rule "prayer=hailmary: voice.name=Bella + George; voice.takes=3"
-    --rule "prayer=creed: voice.model=eleven_v4; voice.direction=reverent, unhurried"
+    --rule "prayer=creed: voice.model=eleven_v3; voice.direction=reverent, unhurried"
     --rule "mystery=1: picture.file=pictures/baptism.jpg; picture.credit=Piero della Francesca, The Baptism of Christ, c. 1450"
 
   where:

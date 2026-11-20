@@ -37,7 +37,7 @@ Variety, so repeated prayers do not all sound alike. It costs more credits, so r
 A different ElevenLabs model, or direction for the voice. `pvc models` lists the models and their prices (free). A different model records the prayers again, so run `pvc show` again and ask about the new number:
 
 ```
---model eleven_v4                                        the whole video
+--model eleven_multilingual_v2                           the whole video (this one is the first video's)
 --rule "prayer=hailmary: voice.model=eleven_flash_v2_5"  part of it
 --set "voice.direction=reverent, unhurried"              how to say it (Eleven v3 and v4 only)
 ```

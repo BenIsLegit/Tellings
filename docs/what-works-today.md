@@ -34,7 +34,7 @@ Every setting has a default. The exact names and choices are in [settings.md](se
 
 - Any voice in your ElevenLabs account, by name. The tool fetches the sound itself.
 - A different voice at any of the five levels.
-- Any ElevenLabs model, picked from a list that shows what each one charges. A different model at any of the five levels.
+- Any ElevenLabs model, picked from a list that shows what each one charges. A different model at any of the five levels. Eleven v4 unless you choose another.
 - Direction for the voice, like "reverent, unhurried", on the models that take it (Eleven v3 and v4).
 - ElevenLabs' own controls: stability, similarity, style, speaker boost, its own speed, seed, sound quality, language, and pronunciation dictionaries for a word it keeps saying wrong.
 - Two voices that take turns on the Our Father, Hail Mary and Glory Be.
@@ -93,7 +93,7 @@ Every setting has a default. The exact names and choices are in [settings.md](se
 - Save a setup under a name and use it again.
 - Start from a saved setup or a preset and change one thing.
 - Share a setup as a file.
-- Seventeen presets. The first is the Luminous video as it was made.
+- Seventeen presets. The first is the Luminous video as it was made, except that it is now spoken by Eleven v4. Choose Eleven Multilingual v2 to hear it as it was.
 
 ## Not built yet
 

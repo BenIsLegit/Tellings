@@ -45,7 +45,7 @@ Changes, any number of each:
   --mysteries joyful                     short for --set prayers.mysteries=joyful
   --voice NAME                           short for --set voice.name=NAME
   --voice \"Bella + George\"               several voices take turns
-  --model eleven_v4                      short for --set voice.model=eleven_v4
+  --model eleven_flash_v2_5              short for --set voice.model=eleven_flash_v2_5
   --takes 5                              short for --set voice.takes=5: five different
                                          recordings of each prayer take turns
   --no-voice                             short for --set voice.on=false
@@ -519,9 +519,11 @@ fn run(a: Args) -> Result<i32> {
                 let unused = if does_not.is_empty() { String::new() } else { format!("Does not use {}. ", does_not.join(" or ")) };
                 println!("      {direction}{unused}{} language{}.", m.languages.len(), if m.languages.len() == 1 { "" } else { "s" });
             }
-            println!("\nThe first video used {}. Pick another with: --model {}", setup::FIRST_MODEL, list.first().map(|m| m.id.as_str()).unwrap_or("ID"));
-            println!("Or for part of the video: --rule \"prayer=hailmary: voice.model={}\"", list.first().map(|m| m.id.as_str()).unwrap_or("ID"));
+            let other = list.iter().map(|m| m.id.as_str()).find(|id| *id != setup::USUAL_MODEL).unwrap_or("ID");
+            println!("\nThe usual model is {}. Pick another with: --model {other}", setup::USUAL_MODEL);
+            println!("Or for part of the video: --rule \"prayer=hailmary: voice.model={other}\"");
             println!("A prayer recorded with one model is recorded again, and paid for again, with another.");
+            println!("The first video was recorded with {0}. --model {0} brings back its sound and its kept recordings.", setup::FIRST_MODEL);
         }
 
         "dictionaries" => {

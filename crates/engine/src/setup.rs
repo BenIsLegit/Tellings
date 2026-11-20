@@ -253,7 +253,11 @@ pub enum TurnEvery {
 /// What joins several voice names into one setting: "Bella + George".
 pub const VOICE_JOIN: &str = " + ";
 
-/// The ElevenLabs model the first video was recorded with.
+/// The ElevenLabs model a setup gets when it does not name one.
+pub const USUAL_MODEL: &str = "eleven_v4";
+
+/// The ElevenLabs model the first video was recorded with. Naming it in a
+/// setup brings back that sound, and the recordings kept from then.
 pub const FIRST_MODEL: &str = "eleven_multilingual_v2";
 
 /// Whether ElevenLabs spells out numbers and short forms before speaking them.
@@ -365,7 +369,7 @@ impl Default for Voice {
             on: true,
             name: "Imperial - Male".into(),
             id: None,
-            model: FIRST_MODEL.into(),
+            model: USUAL_MODEL.into(),
             speed: 1.0,
             exact_speedup: None,
             stability: None,
