@@ -6,6 +6,18 @@
 *.mp4
 build/
 
+# Build leftovers from the tool
+target/
+node_modules/
+.svelte-kit/
+.tauri-build-config.json
+/out/
+
+# Your own pictures and recordings (kept out on purpose)
+/pictures/*
+!/pictures/README.md
+/recordings/
+
 # Prototype media and working files (kept out on purpose)
 prototype/art/
 prototype/audio/

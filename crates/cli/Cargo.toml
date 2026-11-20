@@ -1,0 +1,15 @@
+[package]
+name = "pvc"
+description = "Make a prayer video from the command line."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[[bin]]
+name = "pvc"
+path = "src/main.rs"
+
+[dependencies]
+pvc-engine = { path = "../engine" }
+serde_json.workspace = true
