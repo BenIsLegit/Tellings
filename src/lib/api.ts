@@ -7,6 +7,7 @@ export const api = {
   libraryList: () => invoke<{ presets: Entry[]; saved: Entry[] }>("library_list"),
   setupOpen: (id: string) => invoke<{ entry: Entry; doc: Doc }>("setup_open", { id }),
   setupLook: (doc: Doc) => invoke<Checked>("setup_look", { doc }),
+  recordAgain: (doc: Doc, scene: number) => invoke<{ pieces: number; letters: number }>("record_again", { doc, scene }),
   setupSave: (name: string, doc: Doc) => invoke<Entry>("setup_save", { name, doc }),
   setupDelete: (id: string) => invoke<void>("setup_delete", { id }),
   setupImport: (path: string) => invoke<Entry>("setup_import", { path }),

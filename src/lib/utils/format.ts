@@ -20,6 +20,20 @@ export function fileName(path: string): string {
   return path.split(/[\\/]/).pop() ?? path;
 }
 
+/** Several voices share one setting, joined like this: "Bella + George". They take turns. */
+const VOICE_JOIN = " + ";
+
+export function splitVoices(name: unknown): string[] {
+  return String(name ?? "")
+    .split(VOICE_JOIN)
+    .map((n) => n.trim())
+    .filter((n) => n !== "");
+}
+
+export function joinVoices(names: string[]): string {
+  return names.join(VOICE_JOIN);
+}
+
 const SECTION_NAMES: Record<string, string> = {
   intro: "Opening title",
   opening: "Opening prayers",

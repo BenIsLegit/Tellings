@@ -58,6 +58,8 @@ export interface Scene {
   picture: { file: string; focus: string; zoom: number; credit: string; place: string } | null;
   words: Record<string, any>;
   voice: Record<string, any>;
+  /** When several voices take turns, the one that leads here. */
+  speaker: string | null;
   pace: Record<string, any>;
   pictureChoice: Record<string, any>;
   colorChoice: Record<string, any>;
@@ -88,9 +90,28 @@ export interface Estimate {
 
 export type KeySource = "environment" | "password-store";
 
+/** One piece of speech as it is heard on one scene. */
+export interface Heard {
+  part: "announce" | "prayer";
+  /** The voice, or the name of the person's own sound file. */
+  voice: string;
+  ownRecording: boolean;
+  /** Which recording of these words by this voice, counting from 1. */
+  take: number;
+  letters: number;
+  /** Already recorded and kept. */
+  kept: boolean;
+  /** How many times this same recording is heard in the whole video. */
+  uses: number;
+  /** How many different recordings of these words by this voice the video uses. */
+  takes: number;
+}
+
 export interface Look {
   plan: Plan;
   estimate: Estimate;
+  /** For each scene of the plan, the speech heard on it. */
+  speech: Heard[][];
   key: KeySource | null;
   files: string[];
 }

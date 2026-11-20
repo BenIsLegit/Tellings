@@ -1,0 +1,6 @@
+{
+  "name": "Never Quite the Same",
+  "description": "Four recordings of each prayer take turns, mixed up, so the repeats sound less alike. Costs about twice the credits, once.",
+  "voice": { "takes": 4, "shuffle": true },
+  "pace": { "vary": 0.15 }
+}

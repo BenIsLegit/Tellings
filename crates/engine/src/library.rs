@@ -25,6 +25,7 @@ const PRESETS: &[(&str, &str)] = &[
     ("st-benedict", include_str!("../../../presets/st-benedict.json")),
     ("follow-along", include_str!("../../../presets/follow-along.json")),
     ("voice-drops-out", include_str!("../../../presets/voice-drops-out.json")),
+    ("varied", include_str!("../../../presets/varied.json")),
     ("words-only", include_str!("../../../presets/words-only.json")),
     ("one-decade", include_str!("../../../presets/one-decade.json")),
     ("phone", include_str!("../../../presets/phone.json")),
@@ -228,7 +229,7 @@ mod tests {
     #[test]
     fn every_preset_is_a_working_setup() {
         let paths = temp();
-        assert_eq!(presets().len(), 16);
+        assert_eq!(presets().len(), 17);
         for p in presets() {
             let loaded = load(&paths, &p.id).unwrap_or_else(|e| panic!("{}: {e}", p.id));
             let ctx = crate::plan::Context { today: chrono::NaiveDate::from_ymd_opt(2026, 11, 19).unwrap(), search: vec![] };

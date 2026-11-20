@@ -20,14 +20,24 @@ pub struct AppState {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    tauri::Builder::default()
-        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
+    // For checking the app while the person has it open: PVC_SECOND_WINDOW lets a
+    // second copy start. That copy keeps its hands off the first one's window. It
+    // does not take over as the only copy, and it does not save where its window is.
+    // Give it its own PVC_DATA_DIR too, so it shares nothing.
+    let second = std::env::var_os("PVC_SECOND_WINDOW").is_some();
+    let mut builder = tauri::Builder::default();
+    if !second {
+        // Always first: opening the app twice shows the window that is already there.
+        builder = builder.plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
             if let Some(window) = app.get_webview_window("main") {
                 let _ = window.show();
                 let _ = window.unminimize();
                 let _ = window.set_focus();
             }
-        }))
+        }));
+        builder = builder.plugin(tauri_plugin_window_state::Builder::new().build());
+    }
+    builder
         .plugin(
             tauri_plugin_log::Builder::new()
                 .targets([Target::new(TargetKind::LogDir { file_name: None }), Target::new(TargetKind::Stdout), Target::new(TargetKind::Webview)])
@@ -41,8 +51,7 @@ pub fn run() {
         )
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
-        .plugin(tauri_plugin_window_state::Builder::new().build())
-        .setup(|app| {
+        .setup(move |app| {
             log::info!("Prayer Video Creator v{} starting up", env!("CARGO_PKG_VERSION"));
             // The same folder the command-line tool uses, so setups and recorded speech are shared.
             let paths = if std::env::var_os("PVC_DATA_DIR").is_some() { Paths::standard() } else { Paths::new(app.handle().path().app_data_dir()?) };
@@ -52,7 +61,7 @@ pub fn run() {
             app.manage(AppState { paths, cancel: Arc::new(AtomicBool::new(false)), busy: Arc::new(AtomicBool::new(false)) });
 
             // Remember the window's size and place even if the app is closed abruptly.
-            if let Some(window) = app.get_webview_window("main") {
+            if let Some(window) = app.get_webview_window("main").filter(|_| !second) {
                 use tauri_plugin_window_state::{AppHandleExt, StateFlags};
                 let handle = app.handle().clone();
                 window.on_window_event(move |event| {
@@ -68,6 +77,7 @@ pub fn run() {
             commands::library::library_list,
             commands::library::setup_open,
             commands::library::setup_look,
+            commands::library::record_again,
             commands::library::setup_save,
             commands::library::setup_delete,
             commands::library::setup_import,

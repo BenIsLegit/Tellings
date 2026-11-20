@@ -10,6 +10,7 @@
   <Group title="Pauses" testid="pace-pauses-group">
     <Setting path="pace.before" label="Quiet before each prayer" kind="number" min={0} max={5} step={0.05} unit="sec" />
     <Setting path="pace.after" label="Quiet after each prayer" kind="number" min={0} max={10} step={0.05} unit="sec" />
+    <Setting path="pace.vary" label="Let that quiet differ from bead to bead" kind="number" min={0} max={2} step={0.05} unit="sec" help="Each pause is longer or shorter by up to this much, so the rhythm is less like a machine. 0 keeps every pause the same." />
     <Setting path="pace.think" label="Time to think after a mystery is named" kind="number" min={0} max={60} step={0.5} unit="sec" />
     <Setting path="pace.announceGap" label="Between the mystery's name and the Our Father" kind="number" min={0} max={5} step={0.05} unit="sec" />
   </Group>

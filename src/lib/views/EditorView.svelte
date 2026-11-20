@@ -40,6 +40,8 @@
   let Panel = $derived(tabs.find((t) => t.key === tab)?.panel ?? PrayersPanel);
 
   let scene = $derived(editor.scene);
+  // The recording heard here, when this prayer has more than one take.
+  let take = $derived((editor.look?.speech?.[editor.index] ?? []).find((h) => h.part === "prayer" && h.takes > 1) ?? null);
   let count = $derived(editor.plan?.scenes.length ?? 0);
   let chapters = $derived<[string, string][]>((editor.plan?.scenes ?? []).flatMap((s, i) => (s.chapter ? [[String(i), s.chapter] as [string, string]] : [])));
   let chapterNow = $derived.by(() => {
@@ -156,7 +158,7 @@
         <p class="mt-2 truncate text-sm text-ink-secondary" data-testid="editor-scene-label">
           {#if scene}
             {scene.number ? `Prayer ${scene.number} of ${editor.plan?.prayerCount}` : scene.kind === "intro" ? "Opening title" : "Ending"} · {scene.title}
-            {#if scene.voice.on && scene.kind === "prayer"}<span class="text-ink-muted"> · voice: {scene.muted ? "dropped out" : scene.voice.recording ? "your recording" : scene.voice.name}</span>{/if}
+            {#if scene.voice.on && scene.kind === "prayer"}<span class="text-ink-muted" data-testid="editor-scene-voice"> · voice: {scene.muted ? "dropped out" : scene.voice.recording ? "your recording" : (scene.speaker ?? scene.voice.name)}{#if take && !scene.muted}, take {take.take} of {take.takes}{/if}</span>{/if}
           {/if}
           <span class="text-ink-faint"> · click a bead to jump to it</span>
         </p>

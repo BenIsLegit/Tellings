@@ -6,6 +6,7 @@ use pvc_engine::library::{self, Entry, Kind};
 use pvc_engine::make::{self, Look};
 use pvc_engine::plan::Context;
 use pvc_engine::setup::{self, Setup, SCREENS};
+use pvc_engine::speech::Forgotten;
 use serde::Serialize;
 use serde_json::{json, Value};
 use std::path::PathBuf;
@@ -62,6 +63,20 @@ pub async fn setup_look(state: State<'_, AppState>, doc: Value) -> AppResult<Che
         let ctx = Context::now(paths.search(Some(&paths.setups())));
         let look = make::look(&paths, &setup, &ctx)?;
         Ok(Checked { setup, look })
+    })
+    .await
+}
+
+/// Throw away the kept recordings heard on one scene, so the next video records
+/// them afresh. For a recording that came out wrong. Spends nothing itself: the
+/// next video asks before it records, like any other.
+#[tauri::command]
+pub async fn record_again(state: State<'_, AppState>, doc: Value, scene: usize) -> AppResult<Forgotten> {
+    let paths = state.paths.clone();
+    off_thread(move || {
+        let setup = setup::from_doc(&library::resolve(&paths, &doc)?)?;
+        let ctx = Context::now(paths.search(Some(&paths.setups())));
+        Ok(make::record_again(&paths, &setup, &ctx, scene)?)
     })
     .await
 }
