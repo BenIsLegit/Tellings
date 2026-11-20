@@ -1,13 +1,13 @@
 // Every call the window makes to the engine. The window itself never touches
 // files, the network or the password store.
 import { invoke } from "@tauri-apps/api/core";
-import type { Checked, Credits, Doc, Doctor, Entry, KeySource, Made, Options, Settings, VoiceInfo } from "./types";
+import type { Checked, Credits, Doc, Doctor, Entry, KeySource, Made, ModelInfo, Options, Settings, VoiceInfo } from "./types";
 
 export const api = {
   libraryList: () => invoke<{ presets: Entry[]; saved: Entry[] }>("library_list"),
   setupOpen: (id: string) => invoke<{ entry: Entry; doc: Doc }>("setup_open", { id }),
   setupLook: (doc: Doc) => invoke<Checked>("setup_look", { doc }),
-  recordAgain: (doc: Doc, scene: number) => invoke<{ pieces: number; letters: number }>("record_again", { doc, scene }),
+  recordAgain: (doc: Doc, scene: number) => invoke<{ pieces: number; letters: number; credits: number }>("record_again", { doc, scene }),
   setupSave: (name: string, doc: Doc) => invoke<Entry>("setup_save", { name, doc }),
   setupDelete: (id: string) => invoke<void>("setup_delete", { id }),
   setupImport: (path: string) => invoke<Entry>("setup_import", { path }),
@@ -19,9 +19,11 @@ export const api = {
   keySet: (key: string) => invoke<Credits>("key_set", { key }),
   keyClear: () => invoke<void>("key_clear"),
   voices: (refresh = false) => invoke<VoiceInfo[]>("voices", { refresh }),
+  /** The ElevenLabs models and what each charges. Free. Also brings the costs shown up to date. */
+  models: (refresh = false) => invoke<ModelInfo[]>("models", { refresh }),
   credits: () => invoke<Credits | null>("credits"),
 
-  renderStart: (doc: Doc, approvedLetters: number) => invoke<Made>("render_start", { doc, approvedLetters }),
+  renderStart: (doc: Doc, approvedCredits: number) => invoke<Made>("render_start", { doc, approvedCredits }),
   renderCancel: () => invoke<void>("render_cancel"),
 
   doctor: () => invoke<Doctor>("doctor"),

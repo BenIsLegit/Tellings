@@ -82,9 +82,15 @@ export interface Plan {
 
 export interface Estimate {
   lettersToRecord: number;
+  /** What recording them is expected to cost. This is the number a person agrees to. */
+  creditsToRecord: number;
   lettersKept: number;
   piecesToRecord: number;
-  byVoice: { voice: string; letters: number; pieces: number }[];
+  byVoice: { voice: string; letters: number; credits: number; pieces: number }[];
+  /** The ElevenLabs models that would do the recording. */
+  models: string[];
+  /** True when what a model charges had to be guessed. */
+  ratesGuessed: boolean;
   missingRecordings: string[];
 }
 
@@ -99,6 +105,10 @@ export interface Heard {
   /** Which recording of these words by this voice, counting from 1. */
   take: number;
   letters: number;
+  /** What recording it costs, or would cost again. */
+  credits: number;
+  /** The ElevenLabs model that speaks it. Empty for the person's own recording. */
+  model: string;
   /** Already recorded and kept. */
   kept: boolean;
   /** How many times this same recording is heard in the whole video. */
@@ -134,6 +144,8 @@ export interface Made {
   files: { kind: string; path: string }[];
   seconds: number;
   lettersRecorded: number;
+  /** Credits the recording spent, by ElevenLabs' own count wherever it gave one. */
+  creditsSpent: number;
   pace: { voice: string; natural: number; speedup: number }[];
   hailMarySeconds: number | null;
   warnings: string[];
@@ -145,11 +157,33 @@ export interface VoiceInfo {
   name: string;
   category?: string | null;
   description?: string | null;
+  /** The voice's own settings, used wherever a setup leaves one unset. */
+  settings?: { stability?: number | null; similarity?: number | null; style?: number | null; speakerBoost?: boolean | null; speed?: number | null } | null;
+}
+
+/** One ElevenLabs model that turns text into speech. */
+export interface ModelInfo {
+  id: string;
+  name: string;
+  description: string;
+  /** Credits for each letter. 1 for most models, 0.5 for the fast ones. */
+  creditsPerLetter: number;
+  /** The most letters one piece of speech may hold. 0 when ElevenLabs did not say. */
+  maxLetters: number;
+  canUseStyle: boolean;
+  canUseSpeakerBoost: boolean;
+  /** True when it reads a tag like [reverent] as direction, instead of saying it aloud. */
+  takesDirection: boolean;
+  languages: { id: string; name: string }[];
 }
 
 export interface Credits {
   used: number;
   limit: number;
+  /** The plan: "free", "starter", "creator" … */
+  tier?: string | null;
+  /** When the count starts again, in seconds since 1970. */
+  resets?: number | null;
 }
 
 export interface Doctor {

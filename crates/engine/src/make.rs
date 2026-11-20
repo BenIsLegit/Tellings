@@ -2,7 +2,8 @@
 //!
 //! `look` is free and fast: it plans the video and says what it would cost.
 //! `make` does the work. It will not spend credits unless it is told, in
-//! numbers, how many letters of new speech have been agreed to.
+//! numbers, how many credits of new speech have been agreed to, and it stops
+//! rather than go over that number.
 
 use crate::audio::{self, Timeline};
 use crate::elevenlabs::{Client, Credits};
@@ -76,9 +77,10 @@ fn needs_sound(setup: &Setup) -> bool {
 
 /// Plan the video and work out what it would cost. Spends nothing.
 pub fn look(paths: &Paths, setup: &Setup, ctx: &Context) -> Result<Look> {
-    let plan = plan::build(setup, ctx)?;
+    let mut plan = plan::build(setup, ctx)?;
     let (estimate, speech) = if needs_sound(setup) {
         let script = speech::script(&plan, &ctx.search);
+        plan.warnings.extend(speech::notes(paths, &script));
         (speech::estimate(paths, &script), speech::heard(paths, &script))
     } else {
         (Estimate::default(), vec![Vec::new(); plan.scenes.len()])
@@ -101,7 +103,7 @@ pub fn record_again(paths: &Paths, setup: &Setup, ctx: &Context, scene: usize) -
 /// Credits left in the ElevenLabs account. Free to ask.
 pub fn credits() -> Result<Option<Credits>> {
     match secrets::key()? {
-        Some((key, _)) => Ok(Some(Client::new(&key)?.credits()?)),
+        Some((key, _)) => Ok(Some(Client::from_env(&key)?.credits()?)),
         None => Ok(None),
     }
 }
@@ -143,8 +145,10 @@ pub struct Made {
     pub files: Vec<MadeFile>,
     /// Length of the video, in seconds.
     pub seconds: f32,
-    /// Letters of new speech recorded this time. About one credit each.
+    /// Letters of new speech recorded this time.
     pub letters_recorded: u64,
+    /// Credits that recording spent, by ElevenLabs' own count wherever it gave one.
+    pub credits_spent: u64,
     pub pace: Vec<PaceNote>,
     /// How long one Hail Mary takes, the easiest way to judge the pace. 9.2 in the first video.
     pub hail_mary_seconds: Option<f32>,
@@ -157,8 +161,8 @@ pub struct Request<'a> {
     pub paths: &'a Paths,
     pub setup: &'a Setup,
     pub ctx: &'a Context,
-    /// How many letters of new speech the person has agreed to pay for.
-    pub approved_letters: u64,
+    /// How many credits of new speech the person has agreed to spend.
+    pub approved_credits: u64,
     /// Where ElevenLabs is. Only tests change this.
     pub voice_service: Option<String>,
 }
@@ -206,7 +210,7 @@ pub fn make(req: &Request, on_progress: &mut dyn FnMut(Progress), cancel: &Atomi
         }
     }
     let mut made_files: Vec<MadeFile> = Vec::new();
-    let mut letters_recorded = 0;
+    let mut recorded = speech::Recorded::default();
     let mut pace: Vec<PaceNote> = Vec::new();
     let mut hail_mary_seconds = None;
     let mut seconds = plan.seconds;
@@ -221,8 +225,8 @@ pub fn make(req: &Request, on_progress: &mut dyn FnMut(Progress), cancel: &Atomi
         if !script.missing.is_empty() {
             return Err(Error::setup(format!("These recordings could not be found: {}.", script.missing.join(", "))));
         }
-        let estimate = speech::estimate(paths, &script);
-        let recording = estimate.letters_to_record > 0;
+        warnings.extend(speech::notes(paths, &script));
+        let recording = speech::estimate(paths, &script).letters_to_record > 0;
         if recording {
             let Some((key, _)) = secrets::key()? else {
                 return Err(Error::voice(
@@ -230,18 +234,25 @@ pub fn make(req: &Request, on_progress: &mut dyn FnMut(Progress), cancel: &Atomi
                      Or make it with no voice: turn the voice off.",
                 ));
             };
-            if req.approved_letters < estimate.letters_to_record {
-                return Err(Error::NeedsApproval(format!(
-                    "Making this video would record {} letters of new speech with ElevenLabs. That spends about {} credits. Nothing has been spent yet.",
-                    estimate.letters_to_record, estimate.letters_to_record
-                )));
-            }
             let client = match &req.voice_service {
                 Some(base) => Client::with_base(&key, base)?,
-                None => Client::new(&key)?,
+                None => Client::from_env(&key)?,
             };
+            // What each model charges, straight from ElevenLabs, so the number
+            // agreed to is the number it will come to. Asking is free. If the
+            // list cannot be had, the last one known is used.
+            if let Err(e) = speech::models(paths, &client, false) {
+                log::warn!("could not fetch the list of models, so the cost is worked out from what is already known: {e}");
+            }
+            let estimate = speech::estimate(paths, &script);
+            if req.approved_credits < estimate.credits_to_record {
+                return Err(Error::NeedsApproval(format!(
+                    "Making this video would record {} letters of new speech with ElevenLabs. That spends about {} credits. Nothing has been spent yet.",
+                    estimate.letters_to_record, estimate.credits_to_record
+                )));
+            }
             on_progress(Progress { stage: Stage::Voice, message: format!("Recording the voice: 0 of {}", estimate.pieces_to_record), done: 0, total: estimate.pieces_to_record, fraction: 0.0 });
-            letters_recorded = speech::record(paths, &client, &script, |done, total| {
+            recorded = speech::record(paths, &client, &script, Some(req.approved_credits), |done, total| {
                 on_progress(Progress { stage: Stage::Voice, message: format!("Recording the voice: {done} of {total}"), done, total, fraction: weight(Stage::Voice, done, total, true) });
                 !stopped()
             })?;
@@ -323,6 +334,16 @@ pub fn make(req: &Request, on_progress: &mut dyn FnMut(Progress), cancel: &Atomi
         }
     }
     on_progress(Progress { stage: Stage::Finishing, message: "Done".into(), done: 1, total: 1, fraction: 1.0 });
-    log::info!("made \"{}\": {} file(s), {:.0} s long, {} letters recorded", plan.name, made_files.len(), seconds, letters_recorded);
-    Ok(Made { name: plan.name.clone(), files: made_files, seconds, letters_recorded, pace, hail_mary_seconds, warnings, took: started.elapsed().as_secs_f32() })
+    log::info!("made \"{}\": {} file(s), {:.0} s long, {} letters recorded for {} credits", plan.name, made_files.len(), seconds, recorded.letters, recorded.credits);
+    Ok(Made {
+        name: plan.name.clone(),
+        files: made_files,
+        seconds,
+        letters_recorded: recorded.letters,
+        credits_spent: recorded.credits,
+        pace,
+        hail_mary_seconds,
+        warnings,
+        took: started.elapsed().as_secs_f32(),
+    })
 }

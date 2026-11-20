@@ -253,6 +253,31 @@ pub enum TurnEvery {
 /// What joins several voice names into one setting: "Bella + George".
 pub const VOICE_JOIN: &str = " + ";
 
+/// The ElevenLabs model the first video was recorded with.
+pub const FIRST_MODEL: &str = "eleven_multilingual_v2";
+
+/// Whether ElevenLabs spells out numbers and short forms before speaking them.
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Default)]
+#[serde(rename_all = "kebab-case")]
+pub enum Normalize {
+    /// ElevenLabs decides, as in the first video.
+    #[default]
+    Auto,
+    On,
+    Off,
+}
+
+/// How fine the sound from ElevenLabs is.
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Default)]
+#[serde(rename_all = "kebab-case")]
+pub enum SoundQuality {
+    /// As in the first video. Every plan can have it.
+    #[default]
+    Standard,
+    /// Finer sound. ElevenLabs gives it on the Creator plan and above.
+    High,
+}
+
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 #[serde(default, rename_all = "camelCase", deny_unknown_fields)]
 pub struct Voice {
@@ -263,6 +288,7 @@ pub struct Voice {
     pub name: String,
     /// An exact ElevenLabs voice id. Wins over the name when both are given.
     pub id: Option<String>,
+    /// The ElevenLabs model that speaks. `pvc models` lists them.
     pub model: String,
     /// 1 is the pace of the first video. 0.8 is slower, 1.2 is faster.
     /// The voice is recorded at its natural pace and then sped up to land on this.
@@ -272,6 +298,25 @@ pub struct Voice {
     pub stability: Option<f32>,
     pub similarity: Option<f32>,
     pub style: Option<f32>,
+    /// ElevenLabs "speaker boost": holds closer to the original speaker.
+    pub speaker_boost: Option<bool>,
+    /// How fast the model itself speaks, 0.7 to 1.2. The tool still brings the
+    /// result to `speed`, so this changes how the pace is reached, not the pace.
+    pub model_speed: Option<f32>,
+    /// For a professional voice clone on Eleven v4: how closely to follow its recordings.
+    pub clone_strength: Option<f32>,
+    /// How to say it, for the models that take direction (Eleven v3 and v4):
+    /// "reverent, unhurried". Sent as a tag the voice does not read aloud.
+    pub direction: Option<String>,
+    /// The same number asks ElevenLabs for the same recording again. Each take adds one.
+    pub seed: Option<u32>,
+    /// A language code, like "en" or "es", for models that would otherwise guess.
+    pub language: Option<String>,
+    pub normalize: Normalize,
+    pub quality: SoundQuality,
+    /// Pronunciation dictionaries in your ElevenLabs account, by name. Up to
+    /// three, joined with " + ".
+    pub dictionary: Option<String>,
     /// Your own sound file for the prayer, used in place of a generated voice.
     pub recording: Option<String>,
     /// Your own sound file for naming the mystery.
@@ -307,6 +352,11 @@ impl Voice {
     pub fn has_id(&self) -> bool {
         self.id.as_deref().is_some_and(|i| !i.trim().is_empty())
     }
+
+    /// The pronunciation dictionaries asked for, by name, in the order given.
+    pub fn dictionaries(&self) -> Vec<String> {
+        self.dictionary.as_deref().unwrap_or("").split(VOICE_JOIN).map(str::trim).filter(|n| !n.is_empty()).map(String::from).collect()
+    }
 }
 
 impl Default for Voice {
@@ -315,12 +365,21 @@ impl Default for Voice {
             on: true,
             name: "Imperial - Male".into(),
             id: None,
-            model: "eleven_multilingual_v2".into(),
+            model: FIRST_MODEL.into(),
             speed: 1.0,
             exact_speedup: None,
             stability: None,
             similarity: None,
             style: None,
+            speaker_boost: None,
+            model_speed: None,
+            clone_strength: None,
+            direction: None,
+            seed: None,
+            language: None,
+            normalize: Normalize::default(),
+            quality: SoundQuality::default(),
+            dictionary: None,
             recording: None,
             announce_recording: None,
             recording_speed: 1.0,
@@ -886,12 +945,28 @@ fn check_style(s: &Style, label: &str) -> Result<()> {
     if !(0.5..=4.0).contains(&s.voice.recording_speed) {
         return bad("voice.recordingSpeed must be between 0.5 and 4.");
     }
-    for (name, v) in [("stability", s.voice.stability), ("similarity", s.voice.similarity), ("style", s.voice.style)] {
+    for (name, v) in [("stability", s.voice.stability), ("similarity", s.voice.similarity), ("style", s.voice.style), ("cloneStrength", s.voice.clone_strength)] {
         if let Some(v) = v {
             if !(0.0..=1.0).contains(&v) {
                 return bad(&format!("voice.{name} must be between 0 and 1."));
             }
         }
+    }
+    if s.voice.model.trim().is_empty() {
+        return bad("voice.model is empty. Name an ElevenLabs model, or leave the setting out for the usual one. See them with: pvc models");
+    }
+    if let Some(x) = s.voice.model_speed {
+        if !(0.7..=1.2).contains(&x) {
+            return bad("voice.modelSpeed must be between 0.7 and 1.2. That is as far as ElevenLabs goes. For more, use voice.speed.");
+        }
+    }
+    if let Some(code) = &s.voice.language {
+        if !(2..=3).contains(&code.len()) || !code.chars().all(|c| c.is_ascii_lowercase()) {
+            return bad(&format!("voice.language must be a language code of two or three small letters, like en or es. It is \"{code}\"."));
+        }
+    }
+    if s.voice.dictionaries().len() > 3 {
+        return bad("voice.dictionary lists more than 3 pronunciation dictionaries. ElevenLabs takes 3 at most.");
     }
     if s.voice.on && !s.voice.has_id() && s.voice.names().is_empty() && s.voice.recording.is_none() {
         return bad("the voice is on but has no name. Set voice.name, or turn the voice off with voice.on = false.");

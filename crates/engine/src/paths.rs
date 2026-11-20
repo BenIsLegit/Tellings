@@ -62,6 +62,10 @@ impl Paths {
     pub fn voices_file(&self) -> PathBuf {
         self.data.join("cache").join("voices.json")
     }
+    /// The ElevenLabs models and what each charges, as last fetched.
+    pub fn models_file(&self) -> PathBuf {
+        self.data.join("cache").join("models.json")
+    }
     /// Stills and scene files for the video being made. Safe to delete.
     pub fn work(&self) -> PathBuf {
         self.data.join("work")

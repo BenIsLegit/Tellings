@@ -29,6 +29,8 @@ pvc - make a follow-along prayer video
   pvc export [setup] [changes]   print the whole setup, every setting filled in
   pvc options                    every setting and its choices
   pvc voices                     the voices in your ElevenLabs account
+  pvc models                     the ElevenLabs models, and what each charges
+  pvc dictionaries               the pronunciation dictionaries in your account
   pvc credits                    credits left in your ElevenLabs account
   pvc key status|set|clear       the ElevenLabs API key on this computer
   pvc doctor                     check that everything the tool needs is here
@@ -42,6 +44,7 @@ Changes, any number of each:
   --mysteries joyful                     short for --set prayers.mysteries=joyful
   --voice NAME                           short for --set voice.name=NAME
   --voice \"Bella + George\"               several voices take turns
+  --model eleven_v4                      short for --set voice.model=eleven_v4
   --takes 5                              short for --set voice.takes=5: five different
                                          recordings of each prayer take turns
   --no-voice                             short for --set voice.on=false
@@ -86,6 +89,7 @@ fn parse_args(raw: Vec<String>) -> Result<Args> {
             "--voice" => a.sets.push(("voice.name".into(), json!(need(&mut it, "--voice")?).to_string())),
             "--no-voice" => a.sets.push(("voice.on".into(), "false".into())),
             "--takes" => a.sets.push(("voice.takes".into(), need(&mut it, "--takes")?)),
+            "--model" => a.sets.push(("voice.model".into(), json!(need(&mut it, "--model")?).to_string())),
             "--screen" => a.sets.push(("screen.preset".into(), need(&mut it, "--screen")?)),
             "--to" | "--out" => a.to = Some(need(&mut it, "--to")?),
             "--scene" => a.scene = Some(need(&mut it, "--scene")?),
@@ -193,6 +197,31 @@ fn print_json(v: &impl serde::Serialize) -> Result<()> {
     Ok(())
 }
 
+const NO_KEY: &str = "No ElevenLabs API key is saved yet. Add it in the app under Settings, or run: pvc key set";
+
+/// A way to ask ElevenLabs things, if a key is saved. Asking is free. Only `pvc make` spends.
+fn client() -> Result<Option<elevenlabs::Client>> {
+    match secrets::key()? {
+        Some((key, _)) => Ok(Some(elevenlabs::Client::from_env(&key)?)),
+        None => Ok(None),
+    }
+}
+
+fn need_client() -> Result<elevenlabs::Client> {
+    client()?.ok_or_else(|| Error::voice(NO_KEY))
+}
+
+/// "1 credit a letter", "half a credit a letter"
+fn rate_words(rate: f32) -> String {
+    if (rate - 1.0).abs() < 0.001 {
+        "1 credit a letter".into()
+    } else if (rate - 0.5).abs() < 0.001 {
+        "half a credit a letter".into()
+    } else {
+        format!("{} credits a letter", (rate * 100.0).round() / 100.0)
+    }
+}
+
 fn cost_lines(est: &speech::Estimate, key: Option<secrets::KeySource>) -> Vec<String> {
     let mut out = Vec::new();
     if est.letters_to_record == 0 {
@@ -202,9 +231,13 @@ fn cost_lines(est: &speech::Estimate, key: Option<secrets::KeySource>) -> Vec<St
             out.push("Credits: none. This video has no generated voice.".into());
         }
     } else {
-        out.push(format!("Credits: about {} to record {} new piece{} of speech.", commas(est.letters_to_record), est.pieces_to_record, if est.pieces_to_record == 1 { "" } else { "s" }));
+        out.push(format!("Credits: about {} to record {} new piece{} of speech.", commas(est.credits_to_record), est.pieces_to_record, if est.pieces_to_record == 1 { "" } else { "s" }));
         for v in &est.by_voice {
-            out.push(format!("  {}: {} letters in {} piece{}", v.voice, commas(v.letters), v.pieces, if v.pieces == 1 { "" } else { "s" }));
+            let credits = if v.credits == v.letters { String::new() } else { format!(", {} credits", commas(v.credits)) };
+            out.push(format!("  {}: {} letters in {} piece{}{credits}", v.voice, commas(v.letters), v.pieces, if v.pieces == 1 { "" } else { "s" }));
+        }
+        if est.rates_guessed {
+            out.push("  (A guess. What this model charges is not known yet. The making stops before it goes over the number agreed to.)".into());
         }
         if est.letters_kept > 0 {
             out.push(format!("  ({} letters are already recorded and will be reused.)", commas(est.letters_kept)));
@@ -247,7 +280,16 @@ fn run(a: Args) -> Result<i32> {
 
         "show" | "estimate" | "plan" => {
             let c = choose(&paths, &a, first)?;
-            let look = make::look(&paths, &c.setup, &c.ctx)?;
+            let mut look = make::look(&paths, &c.setup, &c.ctx)?;
+            // A cost is only as good as what is known of the model's price. Asking
+            // ElevenLabs is free, and the answer is kept for a day.
+            if look.estimate.letters_to_record > 0 {
+                if let Some(client) = client()? {
+                    if speech::models(&paths, &client, false).is_ok() {
+                        look = make::look(&paths, &c.setup, &c.ctx)?;
+                    }
+                }
+            }
             if a.json {
                 return print_json(&look).map(|_| 0);
             }
@@ -261,6 +303,12 @@ fn run(a: Args) -> Result<i32> {
             let spoken = || p.scenes.iter().filter(|s| s.kind == SceneKind::Prayer && s.voice.on);
             let voices: std::collections::BTreeSet<String> = spoken().map(|s| s.speaker.clone().unwrap_or_else(|| s.voice.name.clone())).collect();
             println!("  Voice:     {}", if voices.is_empty() { "none".to_string() } else { voices.into_iter().collect::<Vec<_>>().join(", ") });
+            let rates = speech::Rates::kept(&paths);
+            let models: std::collections::BTreeSet<String> = spoken().filter(|s| s.voice.recording.is_none()).map(|s| s.voice.model.clone()).collect();
+            if !models.is_empty() {
+                let named: Vec<String> = models.iter().map(|id| rates.model(id).map(|m| format!("{} ({id})", m.name)).unwrap_or_else(|| id.clone())).collect();
+                println!("  Model:     {}", named.join(", "));
+            }
             // Say so when prayers are recorded more than once, because that is what costs more.
             let most_takes = look.speech.iter().flatten().map(|h| h.takes).max().unwrap_or(1);
             if spoken().any(|s| s.voice.fresh_each_time) {
@@ -281,7 +329,7 @@ fn run(a: Args) -> Result<i32> {
                 println!("    {f}");
             }
             if look.estimate.letters_to_record > 0 {
-                println!("\nTo make it and agree to the credits: pvc make ... --approve-credits {}", look.estimate.letters_to_record);
+                println!("\nTo make it and agree to the credits: pvc make ... --approve-credits {}", look.estimate.credits_to_record);
             }
         }
 
@@ -302,19 +350,19 @@ fn run(a: Args) -> Result<i32> {
                     eprintln!("[{:>3.0}%] {}", p.fraction * 100.0, p.message);
                 }
             };
-            let req = make::Request { paths: &paths, setup: &c.setup, ctx: &c.ctx, approved_letters: a.approve, voice_service: std::env::var("PVC_ELEVENLABS_URL").ok() };
+            let req = make::Request { paths: &paths, setup: &c.setup, ctx: &c.ctx, approved_credits: a.approve, voice_service: None };
             let made = match make::make(&req, &mut on_progress, &cancel) {
                 Ok(m) => m,
                 Err(Error::NeedsApproval(msg)) => {
                     let look = make::look(&paths, &c.setup, &c.ctx)?;
                     if a.json {
-                        print_json(&json!({ "needsApproval": true, "message": msg, "credits": look.estimate.letters_to_record, "estimate": look.estimate }))?;
+                        print_json(&json!({ "needsApproval": true, "message": msg, "credits": look.estimate.credits_to_record, "estimate": look.estimate }))?;
                     } else {
                         eprintln!("{msg}");
                         for line in cost_lines(&look.estimate, look.key) {
                             eprintln!("  {line}");
                         }
-                        eprintln!("\nAsk the person first. If they say yes, run the same command again with:\n  --approve-credits {}", look.estimate.letters_to_record);
+                        eprintln!("\nAsk the person first. If they say yes, run the same command again with:\n  --approve-credits {}", look.estimate.credits_to_record);
                     }
                     return Ok(2);
                 }
@@ -328,7 +376,7 @@ fn run(a: Args) -> Result<i32> {
                 println!("  {:<9} {}", f.kind, f.path);
             }
             if made.letters_recorded > 0 {
-                println!("  Recorded {} letters of new speech (about that many credits).", commas(made.letters_recorded));
+                println!("  Recorded {} letters of new speech. Spent {} credits.", commas(made.letters_recorded), commas(made.credits_spent));
             }
             for n in &made.pace {
                 println!("  Voice \"{}\" speaks {:.1} letters a second on its own; sped up {:.2}x to match the first video's pace.", n.voice, n.natural, n.speedup);
@@ -384,7 +432,7 @@ fn run(a: Args) -> Result<i32> {
             let kept: Vec<&speech::Heard> = look.speech[scene].iter().filter(|h| !h.own_recording && h.kept).collect();
             let gone = make::record_again(&paths, &c.setup, &c.ctx, scene)?;
             if a.json {
-                return print_json(&json!({ "scene": scene, "title": title, "pieces": gone.pieces, "credits": gone.letters })).map(|_| 0);
+                return print_json(&json!({ "scene": scene, "title": title, "pieces": gone.pieces, "letters": gone.letters, "credits": gone.credits })).map(|_| 0);
             }
             if gone.pieces == 0 {
                 println!("Nothing to throw away: no kept recording is heard on scene {scene} ({title}).");
@@ -392,7 +440,7 @@ fn run(a: Args) -> Result<i32> {
                 for h in &kept {
                     println!("Threw away {}. It was heard {} time{} in this video.", heard_line(h, &title), h.uses, if h.uses == 1 { "" } else { "s" });
                 }
-                println!("Nothing has been spent. The next video that uses it will record it again: about {} credits.", commas(gone.letters));
+                println!("Nothing has been spent. The next video that uses it will record it again: about {} credits.", commas(gone.credits));
             }
         }
 
@@ -421,10 +469,7 @@ fn run(a: Args) -> Result<i32> {
         "options" | "settings" => print!("{}", if a.markdown { reference::markdown() } else { reference::text() }),
 
         "voices" => {
-            let Some((key, _)) = secrets::key()? else {
-                return Err(Error::voice("No ElevenLabs API key is saved yet. Add it in the app under Settings, or run: pvc key set"));
-            };
-            let list = speech::voices(&paths, &elevenlabs::Client::new(&key)?, a.refresh)?;
+            let list = speech::voices(&paths, &need_client()?, a.refresh)?;
             if a.json {
                 return print_json(&list).map(|_| 0);
             }
@@ -434,10 +479,62 @@ fn run(a: Args) -> Result<i32> {
             println!("\n{} voices. Use one with: --voice \"{}\"", list.len(), list.first().map(|v| v.name.as_str()).unwrap_or("Name"));
         }
 
+        "models" => {
+            let list = speech::models(&paths, &need_client()?, a.refresh)?;
+            if a.json {
+                return print_json(&list).map(|_| 0);
+            }
+            println!("The ElevenLabs models that turn text into speech\n");
+            for m in &list {
+                let most = if m.max_letters > 0 { format!("up to {} letters a prayer", commas(m.max_letters)) } else { String::new() };
+                println!("  {:<28} {:<26} {:<24} {most}", m.id, m.name, rate_words(m.credits_per_letter));
+                if !m.description.is_empty() {
+                    println!("      {}", m.description);
+                }
+                let mut does_not: Vec<&str> = Vec::new();
+                if !m.can_use_style {
+                    does_not.push("voice.style");
+                }
+                if !m.can_use_speaker_boost {
+                    does_not.push("voice.speakerBoost");
+                }
+                let direction = if m.takes_direction { "Takes voice.direction. " } else { "" };
+                let unused = if does_not.is_empty() { String::new() } else { format!("Does not use {}. ", does_not.join(" or ")) };
+                println!("      {direction}{unused}{} language{}.", m.languages.len(), if m.languages.len() == 1 { "" } else { "s" });
+            }
+            println!("\nThe first video used {}. Pick another with: --model {}", setup::FIRST_MODEL, list.first().map(|m| m.id.as_str()).unwrap_or("ID"));
+            println!("Or for part of the video: --rule \"prayer=hailmary: voice.model={}\"", list.first().map(|m| m.id.as_str()).unwrap_or("ID"));
+            println!("A prayer recorded with one model is recorded again, and paid for again, with another.");
+        }
+
+        "dictionaries" => {
+            let list = need_client()?.dictionaries()?;
+            if a.json {
+                return print_json(&list).map(|_| 0);
+            }
+            if list.is_empty() {
+                println!("There are no pronunciation dictionaries in your ElevenLabs account.");
+                println!("Make one at elevenlabs.io when the voice keeps saying a word wrong. Then: --set voice.dictionary=\"Its Name\"");
+            } else {
+                for d in &list {
+                    println!("  {:<34} {} word{}", d.name, d.rules, if d.rules == 1 { "" } else { "s" });
+                }
+                println!("\nUse one with: --set voice.dictionary=\"{}\"", list[0].name);
+            }
+        }
+
         "credits" => match make::credits()? {
-            Some(c) if a.json => print_json(&json!({ "used": c.used, "limit": c.limit, "left": c.left() }))?,
-            Some(c) => println!("{} credits left of {} this period.", commas(c.left() as u64), commas(c.limit.max(0) as u64)),
-            None => return Err(Error::voice("No ElevenLabs API key is saved yet. Add it in the app under Settings, or run: pvc key set")),
+            Some(c) if a.json => print_json(&json!({ "used": c.used, "limit": c.limit, "left": c.left(), "tier": c.tier, "resets": c.resets }))?,
+            Some(c) => {
+                println!("{} credits left of {} this period.", commas(c.left() as u64), commas(c.limit.max(0) as u64));
+                if let Some(day) = c.resets.and_then(|t| chrono::DateTime::from_timestamp(t, 0)) {
+                    println!("The count starts again on {}.", day.with_timezone(&chrono::Local).format("%-d %B %Y"));
+                }
+                if let Some(tier) = &c.tier {
+                    println!("Plan: {tier}.");
+                }
+            }
+            None => return Err(Error::voice(NO_KEY)),
         },
 
         "key" => match first.unwrap_or("status") {

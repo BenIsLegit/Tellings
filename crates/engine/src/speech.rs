@@ -9,15 +9,18 @@
 //! The work happens in four steps, and only the third one spends credits:
 //!
 //! 1. `script`   — list every piece of speech the plan needs, without repeats
-//! 2. `estimate` — see which pieces are already recorded
+//! 2. `estimate` — see which pieces are already recorded, and what the rest would cost
 //! 3. `record`   — ask ElevenLabs for the missing ones
 //! 4. `prepare`  — trim each piece, bring it to the right pace, and time its lines
+//!
+//! What a piece costs depends on the model: most charge one credit a letter,
+//! the fast ones half. `Rates` holds what ElevenLabs last said each one charges.
 
-use crate::elevenlabs::{Alignment, Client, SpeechRequest, VoiceInfo};
+use crate::elevenlabs::{takes_direction, Alignment, Client, DictionaryInfo, ModelInfo, SpeechRequest, VoiceInfo, MP3};
 use crate::error::{Error, Result};
 use crate::paths::Paths;
 use crate::plan::{find_file, Plan, SceneKind, FIRST_VIDEO_PACE};
-use crate::setup::Voice;
+use crate::setup::{Normalize, SoundQuality, Voice};
 use crate::tools;
 use crate::variety::Turns;
 use serde::{Deserialize, Serialize};
@@ -30,7 +33,8 @@ use std::path::{Path, PathBuf};
 pub const SR: u32 = 48_000;
 pub const SOUND_ENDINGS: [&str; 6] = ["mp3", "wav", "m4a", "ogg", "flac", "aac"];
 
-#[derive(Clone, Debug, PartialEq)]
+/// A voice, and everything that changes how its recordings sound.
+#[derive(Clone, Debug, Default, PartialEq)]
 pub struct VoiceRef {
     pub name: String,
     pub id: Option<String>,
@@ -38,9 +42,42 @@ pub struct VoiceRef {
     pub stability: Option<f32>,
     pub similarity: Option<f32>,
     pub style: Option<f32>,
+    pub speaker_boost: Option<bool>,
+    pub model_speed: Option<f32>,
+    pub clone_strength: Option<f32>,
+    pub seed: Option<u32>,
+    pub language: Option<String>,
+    pub normalize: Normalize,
+    pub quality: SoundQuality,
+    /// Pronunciation dictionaries, by name.
+    pub dictionaries: Vec<String>,
+    /// How to say it. Only the models that take direction are sent it.
+    pub direction: Option<String>,
 }
 
 impl VoiceRef {
+    /// A scene's voice settings, spoken by `name` (or by exactly `id`).
+    fn of(v: &Voice, name: String, id: Option<String>) -> Self {
+        let words = |s: &Option<String>| s.as_deref().map(str::trim).filter(|t| !t.is_empty()).map(String::from);
+        VoiceRef {
+            name,
+            id,
+            model: v.model.trim().to_string(),
+            stability: v.stability,
+            similarity: v.similarity,
+            style: v.style,
+            speaker_boost: v.speaker_boost,
+            model_speed: v.model_speed,
+            clone_strength: v.clone_strength,
+            seed: v.seed,
+            language: words(&v.language),
+            normalize: v.normalize,
+            quality: v.quality,
+            dictionaries: v.dictionaries(),
+            direction: words(&v.direction),
+        }
+    }
+
     /// What the recordings are filed under: the exact id if one was given, else the name.
     fn tag(&self) -> String {
         match &self.id {
@@ -55,7 +92,68 @@ impl VoiceRef {
             self.name.trim().to_string()
         }
     }
+
+    /// The settings added after the first video, and only the ones this voice
+    /// uses, as name, value, name, value. A voice that uses none is filed
+    /// exactly where it always was, so speech recorded before these settings
+    /// existed is still found.
+    ///
+    /// A plain list in a fixed order, never a JSON object: the app and `pvc`
+    /// can be built with objects that order their keys differently, and the
+    /// two must file a recording under the same name.
+    fn extras(&self) -> Vec<serde_json::Value> {
+        let mut list = Vec::new();
+        let mut add = |name: &str, value: serde_json::Value| list.extend([json!(name), value]);
+        if let Some(v) = self.speaker_boost {
+            add("speakerBoost", json!(v));
+        }
+        if let Some(v) = self.model_speed {
+            add("modelSpeed", json!(v));
+        }
+        if let Some(v) = self.clone_strength {
+            add("cloneStrength", json!(v));
+        }
+        if let Some(v) = self.seed {
+            add("seed", json!(v));
+        }
+        if let Some(v) = &self.language {
+            add("language", json!(v));
+        }
+        if self.normalize != Normalize::Auto {
+            add("normalize", json!(self.normalize));
+        }
+        if self.quality != SoundQuality::Standard {
+            add("quality", json!(self.quality));
+        }
+        if !self.dictionaries.is_empty() {
+            add("dictionaries", json!(self.dictionaries.iter().map(|d| d.to_lowercase()).collect::<Vec<_>>()));
+        }
+        list
+    }
+
+    /// The words as they are sent: with the direction in front, for a model that takes it.
+    fn sent(&self, words: &str) -> String {
+        match self.direction.as_deref() {
+            Some(d) if takes_direction(&self.model) => {
+                // "reverent, slow" becomes one tag. Tags already written out are sent as they are.
+                if d.starts_with('[') {
+                    format!("{d} {words}")
+                } else {
+                    format!("[{d}] {words}")
+                }
+            }
+            _ => words.to_string(),
+        }
+    }
+
+    fn output_format(&self) -> &'static str {
+        match self.quality {
+            SoundQuality::Standard => MP3,
+            SoundQuality::High => "mp3_44100_192",
+        }
+    }
 }
+
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum Source {
@@ -136,7 +234,7 @@ impl Builder<'_> {
     /// `how` is the scene's voice settings: how many takes, and in what order.
     /// `silent` is true where the voice has dropped out and the piece only keeps time.
     fn speech(&mut self, voice: VoiceRef, lines: &[String], speed: Speed, how: &Voice, silent: bool) -> usize {
-        let text = lines.join(" ");
+        let text = voice.sent(&lines.join(" "));
         let ways = if how.fresh_each_time { "fresh".to_string() } else { format!("{}{}", how.takes.max(1), if how.shuffle { " mixed" } else { "" }) };
         let key = format!("{ways}|{}|{text}", sound_of(&voice));
         let turns = self.takes.entry(key.clone()).or_insert_with(|| if how.fresh_each_time { Turns::endless() } else { Turns::new(how.takes, how.shuffle, &key) });
@@ -160,7 +258,18 @@ impl Builder<'_> {
 
 /// Everything about a voice that changes how its recordings sound.
 fn sound_of(voice: &VoiceRef) -> String {
-    format!("{}|{}|{:?}|{:?}|{:?}", voice.tag(), voice.model, voice.stability, voice.similarity, voice.style)
+    let extras = voice.extras();
+    let extras = if extras.is_empty() { String::new() } else { format!("|{}", serde_json::Value::Array(extras)) };
+    format!("{}|{}|{:?}|{:?}|{:?}{extras}", voice.tag(), voice.model, voice.stability, voice.similarity, voice.style)
+}
+
+/// What a voice's own pace is measured across: the voice, the model, and how
+/// fast the model was told to speak.
+fn pace_of(voice: &VoiceRef) -> String {
+    match voice.model_speed {
+        Some(speed) => format!("{}|{}|{speed}", voice.tag(), voice.model),
+        None => format!("{}|{}", voice.tag(), voice.model),
+    }
 }
 
 pub fn script(plan: &Plan, search: &[PathBuf]) -> Script {
@@ -171,14 +280,7 @@ pub fn script(plan: &Plan, search: &[PathBuf]) -> Script {
         let v = &scene.voice;
         if scene.kind == SceneKind::Prayer && v.on {
             // With several voices taking turns, the plan has already picked who leads here.
-            let lead = VoiceRef {
-                name: scene.speaker.clone().unwrap_or_else(|| v.name.clone()),
-                id: if scene.speaker.is_some() { None } else { v.id.clone() },
-                model: v.model.clone(),
-                stability: v.stability,
-                similarity: v.similarity,
-                style: v.style,
-            };
+            let lead = VoiceRef::of(v, scene.speaker.clone().unwrap_or_else(|| v.name.clone()), if scene.speaker.is_some() { None } else { v.id.clone() });
             let speed = v.exact_speedup.map(Speed::Exact).unwrap_or(Speed::Pace(v.speed));
             if let Some(text) = &scene.say_first {
                 let lines = [text.clone()];
@@ -223,11 +325,24 @@ fn letters(text: &str) -> u64 {
 
 impl ClipSpec {
     /// The name this piece is filed under before any speed change.
+    ///
+    /// Recorded speech is paid for, so this must not change for a setup that
+    /// has not changed. Anything new is added at the end, and only when used.
     fn raw_key(&self) -> String {
         match &self.source {
-            // The first take is filed as it always was, so speech recorded before takes existed is still found.
-            Source::Speech { voice, text } if self.take <= 1 => hash(&json!(["speech", 2, voice.tag(), voice.model, voice.stability, voice.similarity, voice.style, text])),
-            Source::Speech { voice, text } => hash(&json!(["speech", 2, voice.tag(), voice.model, voice.stability, voice.similarity, voice.style, text, "take", self.take])),
+            Source::Speech { voice, text } => {
+                let mut parts = vec![json!("speech"), json!(2), json!(voice.tag()), json!(voice.model), json!(voice.stability), json!(voice.similarity), json!(voice.style), json!(text)];
+                // The first take is filed as it always was, so speech recorded before takes existed is still found.
+                if self.take > 1 {
+                    parts.extend([json!("take"), json!(self.take)]);
+                }
+                let extras = voice.extras();
+                if !extras.is_empty() {
+                    parts.push(json!("with"));
+                    parts.extend(extras);
+                }
+                hash(&serde_json::Value::Array(parts))
+            }
             Source::Recording { file } => {
                 let meta = std::fs::metadata(file).ok();
                 let len = meta.as_ref().map(|m| m.len()).unwrap_or(0);
@@ -246,6 +361,78 @@ struct SpeechMeta {
     model: String,
     text: String,
     alignment: Option<Alignment>,
+    /// The credits ElevenLabs said it charged for this piece.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    cost: Option<u64>,
+    /// ElevenLabs' own name for the request, for asking them about it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    request_id: Option<String>,
+}
+
+// ───────────────────────── what each model charges ─────────────────────────
+
+/// The models ElevenLabs offers, kept for a day so the list does not have to be
+/// fetched every time. Asking for it is free.
+pub fn models(paths: &Paths, client: &Client, fresh: bool) -> Result<Vec<ModelInfo>> {
+    let file = paths.models_file();
+    if !fresh && is_young(&file) {
+        if let Some(list) = kept_models(paths).filter(|l| !l.is_empty()) {
+            return Ok(list);
+        }
+    }
+    let list = client.models()?;
+    if let Some(dir) = file.parent() {
+        std::fs::create_dir_all(dir)?;
+    }
+    std::fs::write(&file, serde_json::to_string(&list)?)?;
+    Ok(list)
+}
+
+fn is_young(file: &Path) -> bool {
+    std::fs::metadata(file).and_then(|m| m.modified()).ok().and_then(|t| t.elapsed().ok()).is_some_and(|age| age.as_secs() < 86_400)
+}
+
+/// The list as last fetched, however old. Reads the disk only.
+fn kept_models(paths: &Paths) -> Option<Vec<ModelInfo>> {
+    std::fs::read_to_string(paths.models_file()).ok().and_then(|t| serde_json::from_str(&t).ok())
+}
+
+/// What each model charges for a letter, from the list ElevenLabs gave last
+/// time. Reading it never touches the network, so working out a cost stays
+/// quick and free. `models` is what brings it up to date.
+#[derive(Clone, Debug, Default)]
+pub struct Rates {
+    models: Vec<ModelInfo>,
+}
+
+impl Rates {
+    pub fn kept(paths: &Paths) -> Self {
+        Rates { models: kept_models(paths).unwrap_or_default() }
+    }
+
+    pub fn model(&self, id: &str) -> Option<&ModelInfo> {
+        self.models.iter().find(|m| m.id == id)
+    }
+
+    /// True once the list has been fetched at least once.
+    pub fn known(&self) -> bool {
+        !self.models.is_empty()
+    }
+
+    /// Credits for one letter. For a model not on the list this is a careful
+    /// guess: half for the ones ElevenLabs sells at half price, one otherwise.
+    pub fn per_letter(&self, model: &str) -> f32 {
+        match self.model(model) {
+            Some(m) => m.credits_per_letter,
+            None if model.starts_with("eleven_flash_") || model.starts_with("eleven_turbo_v2") => 0.5,
+            None => 1.0,
+        }
+    }
+
+    /// Credits for one piece of speech of this many letters.
+    pub fn cost(&self, model: &str, letters: u64) -> u64 {
+        (letters as f64 * self.per_letter(model) as f64).ceil() as u64
+    }
 }
 
 // ───────────────────────── 2. what is already recorded ─────────────────────────
@@ -254,8 +441,10 @@ struct SpeechMeta {
 #[serde(rename_all = "camelCase")]
 pub struct VoiceCost {
     pub voice: String,
-    /// Letters still to record. One credit each, near enough.
+    /// Letters still to record.
     pub letters: u64,
+    /// What recording them is expected to cost.
+    pub credits: u64,
     pub pieces: usize,
 }
 
@@ -264,31 +453,83 @@ pub struct VoiceCost {
 pub struct Estimate {
     /// Letters ElevenLabs would be asked to record. Zero means no credits are spent.
     pub letters_to_record: u64,
+    /// What recording them is expected to cost: letters times what each model
+    /// charges. This is the number a person agrees to.
+    pub credits_to_record: u64,
     /// Letters already recorded and kept from earlier.
     pub letters_kept: u64,
     pub pieces_to_record: usize,
     pub by_voice: Vec<VoiceCost>,
+    /// The models that would do the recording.
+    pub models: Vec<String>,
+    /// True when what a model charges had to be guessed, because the list of
+    /// models has not been fetched yet or does not have it.
+    pub rates_guessed: bool,
     pub missing_recordings: Vec<String>,
 }
 
+fn is_kept(paths: &Paths, clip: &ClipSpec) -> bool {
+    paths.speech().join(format!("{}.mp3", clip.raw_key())).is_file()
+}
+
 pub fn estimate(paths: &Paths, script: &Script) -> Estimate {
+    let rates = Rates::kept(paths);
     let mut est = Estimate { missing_recordings: script.missing.clone(), ..Default::default() };
     let mut by_voice: BTreeMap<String, VoiceCost> = BTreeMap::new();
+    let mut models: BTreeSet<String> = BTreeSet::new();
     for clip in &script.clips {
         let Source::Speech { voice, text } = &clip.source else { continue };
         let n = letters(text);
-        if paths.speech().join(format!("{}.mp3", clip.raw_key())).is_file() {
+        if is_kept(paths, clip) {
             est.letters_kept += n;
         } else {
+            let credits = rates.cost(&voice.model, n);
             est.letters_to_record += n;
+            est.credits_to_record += credits;
             est.pieces_to_record += 1;
+            est.rates_guessed |= rates.model(&voice.model).is_none();
+            models.insert(voice.model.clone());
             let cost = by_voice.entry(voice.label()).or_insert_with(|| VoiceCost { voice: voice.label(), ..Default::default() });
             cost.letters += n;
+            cost.credits += credits;
             cost.pieces += 1;
         }
     }
     est.by_voice = by_voice.into_values().collect();
+    est.models = models.into_iter().collect();
     est
+}
+
+/// Things about the models worth telling the person before they pay: a model
+/// ElevenLabs does not have, or a setting the chosen model does not use.
+pub fn notes(paths: &Paths, script: &Script) -> Vec<String> {
+    let rates = Rates::kept(paths);
+    let mut out: Vec<String> = Vec::new();
+    let mut say = |note: String| {
+        if !out.contains(&note) {
+            out.push(note);
+        }
+    };
+    for clip in &script.clips {
+        let Source::Speech { voice, .. } = &clip.source else { continue };
+        let model = &voice.model;
+        if voice.direction.is_some() && !takes_direction(model) {
+            say(format!("The model \"{model}\" does not take direction, so voice.direction is left out there. Eleven v3 and v4 take it."));
+        }
+        let Some(info) = rates.model(model) else {
+            if rates.known() {
+                say(format!("ElevenLabs does not list a speech model called \"{model}\" for your account. Pick another under voice.model. See them with: pvc models"));
+            }
+            continue;
+        };
+        if voice.style.is_some() && !info.can_use_style {
+            say(format!("{} does not use voice.style. Put that setting back, or ElevenLabs may refuse it.", info.name));
+        }
+        if voice.speaker_boost.is_some() && !info.can_use_speaker_boost {
+            say(format!("{} does not use voice.speakerBoost. Put that setting back, or ElevenLabs may refuse it.", info.name));
+        }
+    }
+    out
 }
 
 /// One piece of speech as it is heard on one scene.
@@ -303,6 +544,10 @@ pub struct Heard {
     /// Which recording of these words by this voice, counting from 1.
     pub take: u32,
     pub letters: u64,
+    /// What recording it costs, or would cost again.
+    pub credits: u64,
+    /// The ElevenLabs model that speaks it. Empty for the person's own recording.
+    pub model: String,
     /// Already recorded and kept.
     pub kept: bool,
     /// How many times this same recording is heard in the whole video.
@@ -313,6 +558,7 @@ pub struct Heard {
 
 /// For each scene of the plan, the pieces of speech heard on it.
 pub fn heard(paths: &Paths, script: &Script) -> Vec<Vec<Heard>> {
+    let rates = Rates::kept(paths);
     let mut uses = vec![0usize; script.clips.len()];
     for part in script.scenes.iter().flatten() {
         uses[part.clip] += 1;
@@ -333,11 +579,12 @@ pub fn heard(paths: &Paths, script: &Script) -> Vec<Vec<Heard>> {
                 .iter()
                 .map(|part| {
                     let clip = &script.clips[part.clip];
-                    let (voice, own_recording, letters, kept) = match &clip.source {
-                        Source::Speech { voice, text } => (voice.label(), false, letters(text), paths.speech().join(format!("{}.mp3", clip.raw_key())).is_file()),
-                        Source::Recording { file } => (file.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default(), true, 0, true),
+                    let (voice, own_recording, letters, model, kept) = match &clip.source {
+                        Source::Speech { voice, text } => (voice.label(), false, letters(text), voice.model.clone(), is_kept(paths, clip)),
+                        Source::Recording { file } => (file.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default(), true, 0, String::new(), true),
                     };
-                    Heard { part: part.kind, voice, own_recording, take: clip.take, letters, kept, uses: uses[part.clip], takes: takes[&same_words(clip)].len() as u32 }
+                    let credits = if own_recording { 0 } else { rates.cost(&model, letters) };
+                    Heard { part: part.kind, voice, own_recording, take: clip.take, letters, credits, model, kept, uses: uses[part.clip], takes: takes[&same_words(clip)].len() as u32 }
                 })
                 .collect()
         })
@@ -349,14 +596,16 @@ pub fn heard(paths: &Paths, script: &Script) -> Vec<Vec<Heard>> {
 pub struct Forgotten {
     /// How many kept recordings were thrown away.
     pub pieces: usize,
-    /// Their letters: what it costs to record them again.
     pub letters: u64,
+    /// What it is expected to cost to record them again.
+    pub credits: u64,
 }
 
 /// Throw away the kept recordings heard on one scene, so the next video records
 /// them afresh. For a recording that came out wrong. Spends nothing itself; the
 /// next `record` does, and it asks first like any other.
 pub fn forget(paths: &Paths, script: &Script, scene: usize) -> Result<Forgotten> {
+    let rates = Rates::kept(paths);
     let mut out = Forgotten::default();
     let mut done: BTreeSet<usize> = BTreeSet::new();
     for part in script.scenes.get(scene).map(Vec::as_slice).unwrap_or(&[]) {
@@ -383,6 +632,7 @@ pub fn forget(paths: &Paths, script: &Script, scene: usize) -> Result<Forgotten>
         }
         out.pieces += 1;
         out.letters += letters(text);
+        out.credits += rates.cost(&voice.model, letters(text));
         log::warn!("a kept recording by voice \"{}\" (take {}) was thrown away at the person's request", voice.label(), clip.take);
     }
     Ok(out)
@@ -394,12 +644,9 @@ pub fn forget(paths: &Paths, script: &Script, scene: usize) -> Result<Forgotten>
 /// fetched every time. Listing voices is free.
 pub fn voices(paths: &Paths, client: &Client, fresh: bool) -> Result<Vec<VoiceInfo>> {
     let file = paths.voices_file();
-    if !fresh {
-        let young = std::fs::metadata(&file).and_then(|m| m.modified()).ok().and_then(|t| t.elapsed().ok()).is_some_and(|age| age.as_secs() < 86_400);
-        if young {
-            if let Some(list) = std::fs::read_to_string(&file).ok().and_then(|t| serde_json::from_str::<Vec<VoiceInfo>>(&t).ok()) {
-                return Ok(list);
-            }
+    if !fresh && is_young(&file) {
+        if let Some(list) = std::fs::read_to_string(&file).ok().and_then(|t| serde_json::from_str::<Vec<VoiceInfo>>(&t).ok()) {
+            return Ok(list);
         }
     }
     let list = client.voices()?;
@@ -427,29 +674,121 @@ fn voice_id(paths: &Paths, client: &Client, voice: &VoiceRef, known: &mut Option
     Err(Error::voice(format!("There is no voice called \"{}\" in your ElevenLabs account. Your voices include: {}.", voice.name, names.join(", "))))
 }
 
-/// Record every piece that is not already kept. Spends credits. `on_done(i, n)`
-/// is called after each piece; return false from it to stop.
-pub fn record(paths: &Paths, client: &Client, script: &Script, mut on_done: impl FnMut(usize, usize) -> bool) -> Result<u64> {
+/// The account's dictionaries that go by these names, as (id, version), in the order asked for.
+fn dictionary_ids(wanted: &[String], known: &[DictionaryInfo]) -> Result<Vec<(String, String)>> {
+    wanted
+        .iter()
+        .map(|name| {
+            let found = known.iter().find(|d| d.name.trim().eq_ignore_ascii_case(name.trim()) || d.id == name.trim());
+            found.map(|d| (d.id.clone(), d.version.clone())).ok_or_else(|| {
+                let names: Vec<&str> = known.iter().map(|d| d.name.as_str()).take(40).collect();
+                Error::voice(if names.is_empty() {
+                    format!("There is no pronunciation dictionary called \"{name}\" in your ElevenLabs account. It has none yet. Make one at elevenlabs.io, or put voice.dictionary back.")
+                } else {
+                    format!("There is no pronunciation dictionary called \"{name}\" in your ElevenLabs account. Your dictionaries are: {}.", names.join(", "))
+                })
+            })
+        })
+        .collect()
+}
+
+/// What one run of recording came to.
+#[derive(Serialize, Clone, Copy, Debug, Default, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct Recorded {
+    pub pieces: usize,
+    pub letters: u64,
+    /// Credits spent, by ElevenLabs' own count wherever it gave one.
+    pub credits: u64,
+}
+
+/// Record every piece that is not already kept. Spends credits, and never
+/// knowingly more than `limit`: it stops before any piece that would go over.
+/// `on_done(i, n)` is called after each piece; return false from it to stop.
+pub fn record(paths: &Paths, client: &Client, script: &Script, limit: Option<u64>, mut on_done: impl FnMut(usize, usize) -> bool) -> Result<Recorded> {
     std::fs::create_dir_all(paths.speech())?;
-    let todo: Vec<&ClipSpec> = script.clips.iter().filter(|c| matches!(c.source, Source::Speech { .. }) && !paths.speech().join(format!("{}.mp3", c.raw_key())).is_file()).collect();
+    let todo: Vec<&ClipSpec> = script.clips.iter().filter(|c| matches!(c.source, Source::Speech { .. }) && !is_kept(paths, c)).collect();
+    let rates = Rates::kept(paths);
+
+    // Everything that can be checked for free is checked before the first credit is spent.
     let mut known: Option<Vec<VoiceInfo>> = None;
-    let mut spent = 0u64;
+    let mut dictionaries: Option<Vec<DictionaryInfo>> = None;
+    for clip in &todo {
+        let Source::Speech { voice, text } = &clip.source else { continue };
+        voice_id(paths, client, voice, &mut known)?;
+        if !voice.dictionaries.is_empty() {
+            if dictionaries.is_none() {
+                dictionaries = Some(client.dictionaries()?);
+            }
+            dictionary_ids(&voice.dictionaries, dictionaries.as_deref().unwrap_or(&[]))?;
+        }
+        if let Some(model) = rates.model(&voice.model).filter(|m| m.max_letters > 0 && letters(text) > m.max_letters) {
+            return Err(Error::voice(format!(
+                "One piece of speech is {} letters long, and {} takes {} at most. Pick another model for it, or split the text. It starts: \"{}…\"",
+                letters(text),
+                model.name,
+                model.max_letters,
+                text.chars().take(60).collect::<String>()
+            )));
+        }
+    }
+
+    let mut done = Recorded::default();
+    // What the pieces recorded so far were expected to cost, to tell a small limit from a wrong guess.
+    let mut planned = 0u64;
     for (i, clip) in todo.iter().enumerate() {
         let Source::Speech { voice, text } = &clip.source else { continue };
+        let expected = rates.cost(&voice.model, letters(text));
+        if let Some(limit) = limit.filter(|limit| done.credits + expected > *limit) {
+            return Err(Error::NeedsApproval(format!(
+                "Stopped before going over the {limit} credits agreed to. {} of {} pieces are recorded and kept, for {} credits.{}",
+                done.pieces,
+                todo.len(),
+                done.credits,
+                if done.credits > planned { " ElevenLabs charged more than was expected." } else { "" }
+            )));
+        }
+        planned += expected;
         let id = voice_id(paths, client, voice, &mut known)?;
-        let spoken = client.speak(&SpeechRequest { voice_id: &id, model: &voice.model, text, stability: voice.stability, similarity: voice.similarity, style: voice.style })?;
+        let locators = dictionary_ids(&voice.dictionaries, dictionaries.as_deref().unwrap_or(&[]))?;
+        let spoken = client.speak(&SpeechRequest {
+            voice_id: &id,
+            model: &voice.model,
+            text,
+            stability: voice.stability,
+            similarity: voice.similarity,
+            style: voice.style,
+            speaker_boost: voice.speaker_boost,
+            speed: voice.model_speed,
+            clone_strength: voice.clone_strength,
+            // Each take gets its own number. The same one would ask for the same recording again.
+            seed: voice.seed.map(|seed| seed.wrapping_add(clip.take.saturating_sub(1))),
+            language: voice.language.as_deref(),
+            normalize: match voice.normalize {
+                Normalize::Auto => None,
+                Normalize::On => Some("on"),
+                Normalize::Off => Some("off"),
+            },
+            dictionaries: &locators,
+            output_format: voice.output_format(),
+        })?;
         let key = clip.raw_key();
-        let meta = SpeechMeta { voice: voice.label(), voice_id: id, model: voice.model.clone(), text: text.clone(), alignment: spoken.alignment };
+        let meta = SpeechMeta { voice: voice.label(), voice_id: id, model: voice.model.clone(), text: text.clone(), alignment: spoken.alignment, cost: spoken.cost, request_id: spoken.request_id };
         std::fs::write(paths.speech().join(format!("{key}.json")), serde_json::to_string(&meta)?)?;
         // The sound is written last: its presence is what marks the piece as recorded.
         std::fs::write(paths.speech().join(format!("{key}.mp3")), &spoken.audio)?;
-        spent += letters(text);
-        log::info!("recorded {} letters with voice \"{}\"", letters(text), voice.label());
+        done.pieces += 1;
+        done.letters += letters(text);
+        done.credits += spoken.cost.unwrap_or(expected);
+        match spoken.cost {
+            Some(cost) => log::info!("recorded {} letters with voice \"{}\" and model {}: {cost} credits", letters(text), voice.label(), voice.model),
+            None => log::info!("recorded {} letters with voice \"{}\" and model {}", letters(text), voice.label(), voice.model),
+        }
         if !on_done(i + 1, todo.len()) {
             return Err(Error::Cancelled);
         }
     }
-    Ok(spent)
+    Ok(done)
 }
 
 // ───────────────────────── 4. trim, pace and time ─────────────────────────
@@ -561,15 +900,27 @@ struct TrimMeta {
     trim_start: f32,
 }
 
-/// When each line starts, in seconds of the raw recording.
-fn raw_line_starts(lines: &[String], alignment: Option<&Alignment>, raw_start: f32, raw_seconds: f32) -> Vec<f32> {
+/// When each line starts, in seconds of the raw recording. `sent` is how many
+/// letters were sent in all: more than the lines hold when a direction was put in front.
+fn raw_line_starts(lines: &[String], sent: usize, alignment: Option<&Alignment>, raw_start: f32, raw_seconds: f32) -> Vec<f32> {
     let total: usize = lines.iter().map(|l| l.chars().count() + 1).sum::<usize>().saturating_sub(1).max(1);
+    // Where the first line begins among the timed letters. ElevenLabs may time a
+    // direction's letters or leave them out, so look for the words themselves.
+    let lead = alignment.and_then(|a| {
+        let spoken = lines.join(" ");
+        match a.text.find(&spoken) {
+            Some(at) => Some(a.text[..at].chars().count()),
+            // No letters to look through: trust that every letter sent was timed.
+            None if a.starts.len() >= sent => Some(sent.saturating_sub(total)),
+            None => None,
+        }
+    });
     let mut starts = Vec::with_capacity(lines.len());
     let mut offset = 0usize;
     for line in lines {
-        let t = match alignment {
+        let t = match (alignment, lead) {
             // Exact: ElevenLabs told us when each letter is spoken.
-            Some(a) if a.starts.len() >= total && offset < a.starts.len() => a.starts[offset],
+            (Some(a), Some(lead)) if a.starts.len() >= lead + total => a.starts[lead + offset],
             // A guess: lines take time in proportion to their length.
             _ => raw_start + raw_seconds * offset as f32 / total as f32,
         };
@@ -636,7 +987,7 @@ pub fn prepare(paths: &Paths, ffmpeg: &Path, script: &Script, mut on_done: impl 
     for (i, (clip, base)) in script.clips.iter().zip(&bases).enumerate() {
         if let Source::Speech { voice, text } = &clip.source {
             let times = uses[i].max(1);
-            let e = natural.entry(format!("{}|{}", voice.tag(), voice.model)).or_insert((0, 0.0, voice.label()));
+            let e = natural.entry(pace_of(voice)).or_insert((0, 0.0, voice.label()));
             e.0 += letters(text) * times;
             e.1 += base.samples.len() as f32 / SR as f32 * times as f32;
         }
@@ -648,7 +999,7 @@ pub fn prepare(paths: &Paths, ffmpeg: &Path, script: &Script, mut on_done: impl 
         let factor = match (&clip.source, clip.speed) {
             (_, Speed::Exact(x)) => x,
             (Source::Speech { voice, .. }, Speed::Pace(p)) => {
-                let (count, seconds, label) = &natural[&format!("{}|{}", voice.tag(), voice.model)];
+                let (count, seconds, label) = &natural[&pace_of(voice)];
                 let own = *count as f32 / seconds.max(0.1);
                 let speedup = (FIRST_VIDEO_PACE / own).clamp(0.5, 4.0);
                 if !notes.iter().any(|n| &n.voice == label) {
@@ -673,7 +1024,11 @@ pub fn prepare(paths: &Paths, ffmpeg: &Path, script: &Script, mut on_done: impl 
         fade_edges(&mut samples);
         let raw_seconds = base.samples.len() as f32 / SR as f32;
         let seconds = samples.len() as f32 / SR as f32;
-        let line_starts = raw_line_starts(&clip.lines, base.alignment.as_ref(), base.trim_start, raw_seconds)
+        let sent = match &clip.source {
+            Source::Speech { text, .. } => text.chars().count(),
+            Source::Recording { .. } => 0,
+        };
+        let line_starts = raw_line_starts(&clip.lines, sent, base.alignment.as_ref(), base.trim_start, raw_seconds)
             .into_iter()
             .map(|t| ((t - base.trim_start) / factor).clamp(0.0, seconds))
             .collect();
@@ -764,11 +1119,238 @@ mod tests {
 
     #[test]
     fn one_take_is_filed_where_it_always_was() {
-        let voice = VoiceRef { name: "Imperial - Male".into(), id: None, model: "m".into(), stability: None, similarity: None, style: None };
+        let voice = VoiceRef { name: "Imperial - Male".into(), model: "m".into(), ..Default::default() };
         let clip = |take| ClipSpec { source: Source::Speech { voice: voice.clone(), text: "Amen.".into() }, speed: Speed::Pace(1.0), lines: vec!["Amen.".into()], take };
         assert_eq!(clip(1).raw_key(), hash(&json!(["speech", 2, "name:imperial - male", "m", null, null, null, "Amen."])));
+        assert_eq!(clip(2).raw_key(), hash(&json!(["speech", 2, "name:imperial - male", "m", null, null, null, "Amen.", "take", 2])));
         assert_ne!(clip(1).raw_key(), clip(2).raw_key());
         assert_ne!(clip(2).raw_key(), clip(3).raw_key());
+    }
+
+    #[test]
+    fn a_newer_setting_changes_the_filing_only_where_it_is_used() {
+        // Kept speech is paid for. A setup that uses none of the newer settings
+        // must find its recordings exactly where they were.
+        let plain = plan(json!({}));
+        let hail = |p: &Plan| -> String {
+            let s = script(p, &[]);
+            s.clips.iter().find(|c| c.lines.first().map(String::as_str) == Some("Hail Mary, full of grace,")).unwrap().raw_key()
+        };
+        let words = "Hail Mary, full of grace, the Lord is with thee. Blessed art thou among women, and blessed is the fruit of thy womb, Jesus. Holy Mary, Mother of God, pray for us sinners, now and at the hour of our death. Amen.";
+        assert_eq!(hail(&plain), hash(&json!(["speech", 2, "name:imperial - male", "eleven_multilingual_v2", null, null, null, words])));
+
+        // Each newer setting is a different sound, so a different recording.
+        let mut seen = BTreeSet::from([hail(&plain)]);
+        for voice in [
+            json!({ "speakerBoost": false }),
+            json!({ "modelSpeed": 1.1 }),
+            json!({ "cloneStrength": 0.5 }),
+            json!({ "seed": 7 }),
+            json!({ "language": "en" }),
+            json!({ "normalize": "on" }),
+            json!({ "quality": "high" }),
+            json!({ "dictionary": "Prayers" }),
+            json!({ "model": "eleven_v4", "direction": "reverent" }),
+        ] {
+            assert!(seen.insert(hail(&plan(json!({ "voice": voice })))), "{voice} did not change where the recording is filed");
+        }
+        // And each is filed under a name that is pinned here, like the first video's.
+        let seeded = plan(json!({ "voice": { "seed": 7, "quality": "high", "dictionary": "Prayers" } }));
+        assert_eq!(
+            hail(&seeded),
+            hash(&json!(["speech", 2, "name:imperial - male", "eleven_multilingual_v2", null, null, null, words, "with", "seed", 7, "quality", "high", "dictionaries", ["prayers"]]))
+        );
+        // Setting one back to what ElevenLabs does anyway is the same as leaving it out.
+        assert_eq!(hail(&plan(json!({ "voice": { "normalize": "auto", "quality": "standard" } }))), hail(&plain));
+    }
+
+    #[test]
+    fn direction_goes_in_front_only_for_models_that_take_it() {
+        assert!(takes_direction("eleven_v3") && takes_direction("eleven_v4") && takes_direction("eleven_v4_turbo") && takes_direction("eleven_v12"));
+        assert!(!takes_direction("eleven_multilingual_v2") && !takes_direction("eleven_flash_v2_5") && !takes_direction("eleven_turbo_v2") && !takes_direction("eleven_v2"));
+
+        let sent = |voice: serde_json::Value| -> (String, u64) {
+            let p = plan(json!({ "voice": voice }));
+            let s = script(&p, &[]);
+            let est = estimate(&temp("direction"), &s);
+            let clip = s.clips.iter().find(|c| c.lines.first().map(String::as_str) == Some("Glory be to the Father,")).unwrap();
+            let Source::Speech { text, .. } = &clip.source else { panic!() };
+            (text.clone(), est.letters_to_record)
+        };
+        let (plain, plain_letters) = sent(json!({ "model": "eleven_v4" }));
+        assert!(plain.starts_with("Glory be to the Father,"));
+        let (directed, directed_letters) = sent(json!({ "model": "eleven_v4", "direction": "reverent, unhurried" }));
+        assert_eq!(directed, format!("[reverent, unhurried] {plain}"));
+        // The direction is sent with every piece, so it is counted in the cost.
+        assert!(directed_letters > plain_letters);
+        // Tags a person wrote out are sent as they are.
+        assert!(sent(json!({ "model": "eleven_v3", "direction": "[calm] [slowly]" })).0.starts_with("[calm] [slowly] Glory be"));
+        // An older model would say the direction aloud, so it never gets one.
+        assert_eq!(sent(json!({ "direction": "reverent" })).0, plain);
+        let p = plan(json!({ "voice": { "direction": "reverent" } }));
+        let notes = notes(&temp("direction-notes"), &script(&p, &[]));
+        assert!(notes.len() == 1 && notes[0].contains("does not take direction"), "{notes:?}");
+    }
+
+    fn keep_models(paths: &Paths) {
+        let models = json!([
+            { "id": "eleven_multilingual_v2", "name": "Eleven Multilingual v2", "description": "", "creditsPerLetter": 1.0, "maxLetters": 10000, "canUseStyle": true, "canUseSpeakerBoost": true, "languages": [] },
+            { "id": "eleven_flash_v2_5", "name": "Eleven Flash v2.5", "description": "", "creditsPerLetter": 0.5, "maxLetters": 40000, "canUseStyle": false, "canUseSpeakerBoost": false, "languages": [] },
+            { "id": "eleven_v3", "name": "Eleven v3", "description": "", "creditsPerLetter": 1.0, "maxLetters": 300, "canUseStyle": false, "canUseSpeakerBoost": false, "languages": [] },
+            { "id": "eleven_dear", "name": "Eleven Dear", "description": "", "creditsPerLetter": 2.0, "maxLetters": 0, "canUseStyle": true, "canUseSpeakerBoost": true, "languages": [] }
+        ]);
+        std::fs::create_dir_all(paths.models_file().parent().unwrap()).unwrap();
+        std::fs::write(paths.models_file(), models.to_string()).unwrap();
+    }
+
+    #[test]
+    fn the_cost_follows_what_the_model_charges() {
+        let paths = temp("rates");
+        let cost = |paths: &Paths, model: &str| estimate(paths, &script(&plan(json!({ "prayers": { "mysteries": "luminous" }, "voice": { "model": model } })), &[]));
+
+        // Before the list of models has ever been fetched: one credit a letter, and it says it is a guess.
+        let guess = cost(&paths, "eleven_multilingual_v2");
+        assert_eq!(guess.credits_to_record, guess.letters_to_record);
+        assert!(guess.rates_guessed);
+        // The models ElevenLabs sells at half price are guessed at half.
+        assert!(cost(&paths, "eleven_flash_v2_5").credits_to_record < guess.credits_to_record * 6 / 10);
+
+        keep_models(&paths);
+        let full = cost(&paths, "eleven_multilingual_v2");
+        assert_eq!((full.credits_to_record, full.rates_guessed), (full.letters_to_record, false));
+        assert_eq!(full.models, ["eleven_multilingual_v2"]);
+        // Half price, rounded up piece by piece: never under by more than one credit a piece.
+        let half = cost(&paths, "eleven_flash_v2_5");
+        assert!(half.credits_to_record >= half.letters_to_record / 2 && half.credits_to_record <= half.letters_to_record / 2 + half.pieces_to_record as u64);
+        assert_eq!(half.by_voice[0].credits, half.credits_to_record);
+        assert_eq!(cost(&paths, "eleven_dear").credits_to_record, full.letters_to_record * 2);
+        // A model that is not on the list is still a guess, and the person is told.
+        let odd = plan(json!({ "voice": { "model": "eleven_made_up" } }));
+        assert!(estimate(&paths, &script(&odd, &[])).rates_guessed);
+        let notes = notes(&paths, &script(&odd, &[]));
+        assert!(notes.len() == 1 && notes[0].contains("eleven_made_up"), "{notes:?}");
+        // A setting the model does not use is pointed out once, however many pieces use it.
+        let styled = plan(json!({ "voice": { "model": "eleven_flash_v2_5", "style": 0.3, "speakerBoost": true } }));
+        let notes = super::notes(&paths, &script(&styled, &[]));
+        assert_eq!(notes.len(), 2, "{notes:?}");
+        // What one bead would cost to record again follows the model too.
+        let p = plan(json!({ "voice": { "model": "eleven_dear" } }));
+        let h = heard(&paths, &script(&p, &[]));
+        let bead = p.scenes.iter().position(|sc| sc.bead.as_deref() == Some("d1b1")).unwrap();
+        assert_eq!((h[bead][0].credits, h[bead][0].model.as_str()), (h[bead][0].letters * 2, "eleven_dear"));
+        let _ = std::fs::remove_dir_all(&paths.data);
+    }
+
+    #[test]
+    fn recording_never_knowingly_goes_over_what_was_agreed() {
+        let paths = temp("limit");
+        let p = plan(json!({ "prayers": { "mysteries": "luminous" } }));
+        let s = script(&p, &[]);
+        let agreed = estimate(&paths, &s).credits_to_record;
+        let mut server = mockito::Server::new();
+        server.mock("GET", "/v2/voices").match_query(mockito::Matcher::Any).with_body(r#"{"voices":[{"voice_id":"imp","name":"Imperial - Male"}],"has_more":false}"#).create();
+        // ElevenLabs charges far more than was expected for every piece.
+        let speak = server
+            .mock("POST", "/v1/text-to-speech/imp/with-timestamps")
+            .match_query(mockito::Matcher::Any)
+            .with_header("character-cost", &(agreed / 2).to_string())
+            .with_body(r#"{"audio_base64":"AAEC"}"#)
+            .expect_at_most(3)
+            .create();
+        let client = Client::with_base("k", &server.url()).unwrap();
+        let err = record(&paths, &client, &s, Some(agreed), |_, _| true).unwrap_err();
+        assert!(matches!(err, Error::NeedsApproval(_)), "{err}");
+        assert!(err.to_string().contains("charged more than was expected"), "{err}");
+        speak.assert();
+        // What was recorded before it stopped is kept, so it is not paid for again.
+        let after = estimate(&paths, &s);
+        assert!(after.pieces_to_record < 13 && after.pieces_to_record >= 10, "{} pieces left", after.pieces_to_record);
+        let _ = std::fs::remove_dir_all(&paths.data);
+    }
+
+    #[test]
+    fn the_real_cost_is_the_one_elevenlabs_reports() {
+        let paths = temp("real-cost");
+        let p = plan(json!({ "prayers": { "opening": false, "closing": false, "firstDecade": 1, "lastDecade": 1, "fatima": false }, "voice": { "announce": false } }));
+        let s = script(&p, &[]);
+        let mut server = mockito::Server::new();
+        server.mock("GET", "/v2/voices").match_query(mockito::Matcher::Any).with_body(r#"{"voices":[{"voice_id":"imp","name":"Imperial - Male"}],"has_more":false}"#).create();
+        server.mock("POST", "/v1/text-to-speech/imp/with-timestamps").match_query(mockito::Matcher::Any).with_header("character-cost", "10").with_header("request-id", "req-9").with_body(r#"{"audio_base64":"AAEC"}"#).create();
+        let client = Client::with_base("k", &server.url()).unwrap();
+        // Our Father, Hail Mary, Glory Be: three pieces at ten credits each, whatever their length.
+        let done = record(&paths, &client, &s, None, |_, _| true).unwrap();
+        assert_eq!((done.pieces, done.credits), (3, 30));
+        assert!(done.letters > 300);
+        let _ = std::fs::remove_dir_all(&paths.data);
+    }
+
+    #[test]
+    fn what_can_be_checked_is_checked_before_anything_is_spent() {
+        let paths = temp("checks");
+        keep_models(&paths);
+        let mut server = mockito::Server::new();
+        server.mock("GET", "/v2/voices").match_query(mockito::Matcher::Any).with_body(r#"{"voices":[{"voice_id":"imp","name":"Imperial - Male"}],"has_more":false}"#).create();
+        server.mock("GET", "/v1/pronunciation-dictionaries").match_query(mockito::Matcher::Any).with_body(r#"{"pronunciation_dictionaries":[{"id":"d1","name":"Prayers","latest_version_id":"v2","latest_version_rules_num":3}],"has_more":false}"#).create();
+        let never = server.mock("POST", "/v1/text-to-speech/imp/with-timestamps").match_query(mockito::Matcher::Any).with_body(r#"{"audio_base64":"AAEC"}"#).expect(0).create();
+        let client = Client::with_base("k", &server.url()).unwrap();
+
+        // The Creed is longer than this model takes in one piece.
+        let long = script(&plan(json!({ "voice": { "model": "eleven_v3" } })), &[]);
+        let err = record(&paths, &client, &long, None, |_, _| true).unwrap_err().to_string();
+        assert!(err.contains("300 at most") && err.contains("Eleven v3"), "{err}");
+
+        // A dictionary that is not in the account.
+        let odd = script(&plan(json!({ "voice": { "dictionary": "Prayers + Latin" } })), &[]);
+        let err = record(&paths, &client, &odd, None, |_, _| true).unwrap_err().to_string();
+        assert!(err.contains("\"Latin\"") && err.contains("Prayers"), "{err}");
+        never.assert();
+        let _ = std::fs::remove_dir_all(&paths.data);
+    }
+
+    #[test]
+    fn a_setup_s_choices_reach_elevenlabs() {
+        let paths = temp("sent");
+        let p = plan(json!({
+            "prayers": { "opening": false, "closing": false, "firstDecade": 1, "lastDecade": 1, "fatima": false },
+            "voice": { "announce": false, "model": "eleven_flash_v2_5", "stability": 0.5, "speakerBoost": true, "modelSpeed": 1.1, "seed": 40, "language": "en", "normalize": "on", "quality": "high", "dictionary": "prayers", "takes": 2 },
+            "rules": [{ "for": { "prayer": "ourfather" }, "set": { "voice": { "model": "eleven_v4", "direction": "reverent", "modelSpeed": null, "seed": null, "dictionary": null, "takes": 1 } } }]
+        }));
+        let s = script(&p, &[]);
+        let mut server = mockito::Server::new();
+        server.mock("GET", "/v2/voices").match_query(mockito::Matcher::Any).with_body(r#"{"voices":[{"voice_id":"imp","name":"Imperial - Male"}],"has_more":false}"#).create();
+        server.mock("GET", "/v1/pronunciation-dictionaries").match_query(mockito::Matcher::Any).with_body(r#"{"pronunciation_dictionaries":[{"id":"d1","name":"Prayers","latest_version_id":"v2","latest_version_rules_num":3}],"has_more":false}"#).create();
+        let high = mockito::Matcher::UrlEncoded("output_format".into(), "mp3_44100_192".into());
+        let flash = |seed: u32| {
+            mockito::Matcher::PartialJson(json!({
+                "model_id": "eleven_flash_v2_5",
+                "voice_settings": { "stability": 0.5, "use_speaker_boost": true, "speed": 1.1 },
+                "seed": seed,
+                "language_code": "en",
+                "apply_text_normalization": "on",
+                "pronunciation_dictionary_locators": [{ "pronunciation_dictionary_id": "d1", "version_id": "v2" }],
+            }))
+        };
+        // Hail Mary and Glory Be, two takes each. The second take asks with the next seed.
+        let first = server.mock("POST", "/v1/text-to-speech/imp/with-timestamps").match_query(high.clone()).match_body(flash(40)).with_body(r#"{"audio_base64":"AAEC"}"#).expect(2).create();
+        let second = server.mock("POST", "/v1/text-to-speech/imp/with-timestamps").match_query(high.clone()).match_body(flash(41)).with_body(r#"{"audio_base64":"AAEC"}"#).expect(1).create();
+        // The Our Father has its own model, a direction, and no seed.
+        let ours = server
+            .mock("POST", "/v1/text-to-speech/imp/with-timestamps")
+            .match_query(high)
+            .match_body(mockito::Matcher::AllOf(vec![
+                mockito::Matcher::PartialJson(json!({ "model_id": "eleven_v4", "voice_settings": { "stability": 0.5, "use_speaker_boost": true } })),
+                mockito::Matcher::Regex(r#""text":"\[reverent\] Our Father"#.into()),
+            ]))
+            .with_body(r#"{"audio_base64":"AAEC"}"#)
+            .expect(1)
+            .create();
+        let client = Client::with_base("k", &server.url()).unwrap();
+        let done = record(&paths, &client, &s, None, |_, _| true).unwrap();
+        first.assert();
+        second.assert();
+        ours.assert();
+        assert_eq!(done.pieces, 4);
+        let _ = std::fs::remove_dir_all(&paths.data);
     }
 
     #[test]
@@ -831,7 +1413,7 @@ mod tests {
         server.mock("GET", "/v2/voices").match_query(mockito::Matcher::Any).with_body(r#"{"voices":[{"voice_id":"imp","name":"Imperial - Male"}],"has_more":false}"#).create();
         server.mock("POST", "/v1/text-to-speech/imp/with-timestamps").match_query(mockito::Matcher::Any).with_body(r#"{"audio_base64":"AAEC"}"#).create();
         let client = Client::with_base("k", &server.url()).unwrap();
-        record(&paths, &client, &s, |_, _| true).unwrap();
+        record(&paths, &client, &s, None, |_, _| true).unwrap();
         assert_eq!(estimate(&paths, &s).pieces_to_record, 0);
 
         // The second Hail Mary of decade one is take 2. Throw that one away.
@@ -846,7 +1428,7 @@ mod tests {
         assert!(h[first][0].kept && !h[bead][0].kept);
         assert_eq!(forget(&paths, &s, bead).unwrap(), Forgotten::default());
         // Recording again fills the hole and nothing else.
-        assert_eq!(record(&paths, &client, &s, |_, _| true).unwrap(), gone.letters);
+        assert_eq!(record(&paths, &client, &s, None, |_, _| true).unwrap().letters, gone.letters);
         let _ = std::fs::remove_dir_all(&paths.data);
     }
 
@@ -892,13 +1474,13 @@ mod tests {
             .expect(13)
             .create();
         let client = Client::with_base("k", &server.url()).unwrap();
-        let spent = record(&paths, &client, &s, |_, _| true).unwrap();
-        assert_eq!(spent, before.letters_to_record);
+        let spent = record(&paths, &client, &s, None, |_, _| true).unwrap();
+        assert_eq!((spent.letters, spent.credits, spent.pieces), (before.letters_to_record, before.credits_to_record, 13));
         let after = estimate(&paths, &s);
         assert_eq!(after.letters_to_record, 0);
         assert_eq!(after.letters_kept, before.letters_to_record);
         // A second run asks for nothing.
-        assert_eq!(record(&paths, &client, &s, |_, _| true).unwrap(), 0);
+        assert_eq!(record(&paths, &client, &s, None, |_, _| true).unwrap(), Recorded::default());
         speak.assert();
         let _ = std::fs::remove_dir_all(&paths.data);
     }
@@ -910,7 +1492,7 @@ mod tests {
         server.mock("GET", "/v2/voices").match_query(mockito::Matcher::Any).with_body(r#"{"voices":[{"voice_id":"a","name":"Bella"}],"has_more":false}"#).create();
         let client = Client::with_base("k", &server.url()).unwrap();
         let s = script(&plan(json!({})), &[]);
-        let err = record(&paths, &client, &s, |_, _| true).unwrap_err().to_string();
+        let err = record(&paths, &client, &s, None, |_, _| true).unwrap_err().to_string();
         assert!(err.contains("Imperial - Male") && err.contains("Bella"), "{err}");
         let _ = std::fs::remove_dir_all(&paths.data);
     }
@@ -929,11 +1511,26 @@ mod tests {
     fn lines_are_timed_from_the_letters() {
         let lines = vec!["Ab".to_string(), "Cd".to_string()];
         // "Ab Cd": five letters. The second line starts at the fourth letter.
-        let a = Alignment { starts: vec![0.5, 0.6, 0.7, 0.9, 1.0], ends: vec![0.6, 0.7, 0.9, 1.0, 1.2] };
-        assert_eq!(raw_line_starts(&lines, Some(&a), 0.0, 2.0), [0.5, 0.9]);
+        let a = Alignment { starts: vec![0.5, 0.6, 0.7, 0.9, 1.0], ends: vec![0.6, 0.7, 0.9, 1.0, 1.2], text: String::new() };
+        assert_eq!(raw_line_starts(&lines, 5, Some(&a), 0.0, 2.0), [0.5, 0.9]);
         // With no timings, guess by length.
-        let guess = raw_line_starts(&lines, None, 0.0, 2.0);
+        let guess = raw_line_starts(&lines, 5, None, 0.0, 2.0);
         assert_eq!(guess[0], 0.0);
         assert!((guess[1] - 1.2).abs() < 0.001);
+
+        // A direction went in front: "[x] Ab Cd" is nine letters. ElevenLabs may
+        // time the direction's letters too, or leave them out. Either way the
+        // lines are found by their own words.
+        let times = |n: usize| -> Vec<f32> { (0..n).map(|i| i as f32 / 10.0).collect() };
+        let with = Alignment { starts: times(9), ends: times(9), text: "[x] Ab Cd".into() };
+        assert_eq!(raw_line_starts(&lines, 9, Some(&with), 0.0, 2.0), [0.4, 0.7]);
+        let without = Alignment { starts: times(5), ends: times(5), text: "Ab Cd".into() };
+        assert_eq!(raw_line_starts(&lines, 9, Some(&without), 0.0, 2.0), [0.0, 0.3]);
+        // Speech kept from before the letters were stored: every letter sent was timed.
+        let old = Alignment { starts: times(9), ends: times(9), text: String::new() };
+        assert_eq!(raw_line_starts(&lines, 9, Some(&old), 0.0, 2.0), [0.4, 0.7]);
+        // Timings that do not cover the words are not trusted.
+        let short = Alignment { starts: times(3), ends: times(3), text: String::new() };
+        assert_eq!(raw_line_starts(&lines, 5, Some(&short), 0.0, 2.0)[0], 0.0);
     }
 }

@@ -88,7 +88,12 @@
             <Badge tone="warn">No key</Badge> Needed only for a generated voice.
           {/if}
         </p>
-        {#if credits}<p data-testid="settings-credits">{commas(Math.max(0, credits.limit - credits.used))} credits left of {commas(credits.limit)} this period.</p>{/if}
+        {#if credits}
+          <p data-testid="settings-credits">
+            {commas(Math.max(0, credits.limit - credits.used))} credits left of {commas(credits.limit)} this period.
+            {#if credits.resets}The count starts again on {new Date(credits.resets * 1000).toLocaleDateString(undefined, { day: "numeric", month: "long" })}.{/if}
+          </p>
+        {/if}
         <div class="flex gap-2">
           <TextInput type="password" value={key} placeholder="Paste your ElevenLabs API key" testid="settings-key-input" onchange={(v) => (key = v)} />
           <Button variant="primary" disabled={!key.trim() || savingKey} testid="settings-key-save-btn" onclick={saveKey}>{savingKey ? "Checking…" : "Save key"}</Button>

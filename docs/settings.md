@@ -58,12 +58,21 @@ Can be set for part of the video with a rule.
 | `voice.freshEachTime` | true \| false | A new recording every time a prayer is said, so no two sound the same. Costs the most credits. Wins over takes. |
 | `voice.shuffle` | true \| false | Mix up the order of the takes and the voices, instead of going in turn. The mix is the same each time the video is made. |
 | `voice.id` | a voice id | An exact ElevenLabs voice id. Wins over the name, and leads alone. |
-| `voice.model` | a model id | The ElevenLabs model. Usually left alone. |
+| `voice.model` | a model id | The ElevenLabs model that speaks. See them, and what each costs, with: pvc models. eleven_multilingual_v2 is the first video. |
+| `voice.direction` | words | How to say it, like: reverent, unhurried. Only Eleven v3 and v4 take direction. It is sent as a tag the voice does not read aloud, and left out for other models. |
 | `voice.speed` | 0.4 to 2.5 | 1 is the pace of the first video. 0.8 is slower, 1.2 is faster. |
 | `voice.exactSpeedup` | 0.5 to 4 | Skip the measuring and speed the recording up by exactly this much. |
-| `voice.stability` | 0 to 1 | ElevenLabs voice setting. Leave out to use the voice's own. |
-| `voice.similarity` | 0 to 1 | ElevenLabs voice setting. Leave out to use the voice's own. |
-| `voice.style` | 0 to 1 | ElevenLabs voice setting. Leave out to use the voice's own. |
+| `voice.modelSpeed` | 0.7 to 1.2 | How fast ElevenLabs itself speaks. The tool still lands on voice.speed, so a higher number here means less speeding up afterwards. Eleven v4 has no speed setting. |
+| `voice.stability` | 0 to 1 | ElevenLabs voice setting. Lower lets one recording differ more from the next. Leave out to use the voice's own. |
+| `voice.similarity` | 0 to 1 | ElevenLabs voice setting: how closely to hold to the voice. Leave out to use the voice's own. |
+| `voice.style` | 0 to 1 | ElevenLabs voice setting: how much to play up the voice's style. Leave out to use the voice's own. Not every model uses it. |
+| `voice.speakerBoost` | true \| false | ElevenLabs voice setting: holds closer to the original speaker. Leave out to use the voice's own. Not every model uses it. |
+| `voice.cloneStrength` | 0 to 1 | Only for a professional voice clone on Eleven v4: how closely to follow its recordings. ElevenLabs suggests 0. |
+| `voice.seed` | a whole number | The same number asks ElevenLabs for the same recording again, as near as it can. Each take adds one, so takes still differ. |
+| `voice.language` | a language code, like en | Tells the model which language the words are in. Eleven Multilingual v2 works it out by itself and ignores this. |
+| `voice.normalize` | auto \| on \| off | Whether ElevenLabs spells out numbers and short forms before speaking them. auto lets it decide. |
+| `voice.quality` | standard \| high | How fine the sound from ElevenLabs is. high needs the Creator plan or above. standard is the first video. |
+| `voice.dictionary` | a dictionary name, or up to three joined with + | Pronunciation dictionaries in your ElevenLabs account, for a word the voice keeps saying wrong. See: pvc dictionaries. |
 | `voice.recording` | a sound file | Your own recording of the prayer, used in place of a generated voice. Set it with a rule for one kind of prayer. |
 | `voice.announceRecording` | a sound file | Your own recording of the mystery being named. |
 | `voice.recordingSpeed` | 0.5 to 4 | Speed change for your own recordings. 1 leaves them alone. |

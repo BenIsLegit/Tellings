@@ -21,7 +21,7 @@
   let problem = $state("");
 
   let est = $derived(look?.estimate);
-  let cost = $derived(est?.lettersToRecord ?? 0);
+  let cost = $derived(est?.creditsToRecord ?? 0);
   let blocked = $derived(cost > 0 && !look?.key ? "No ElevenLabs API key is saved yet. Add it under Settings, or turn the voice off." : (est?.missingRecordings.length ?? 0) > 0 ? `These recordings could not be found: ${est?.missingRecordings.join(", ")}` : "");
   const KIND: Record<string, string> = { video: "Video", sound: "Sound only", captions: "Captions", guide: "Tap-through guide" };
 
@@ -34,6 +34,12 @@
     progress = null;
     try {
       look = (await api.setupLook(doc)).look;
+      if (look.estimate.lettersToRecord > 0 && look.key) {
+        // What each model charges, asked of ElevenLabs (free, kept for a day), so
+        // the number on the button is the number it will come to.
+        const asked = await api.models().catch(() => null);
+        if (asked) look = (await api.setupLook(doc)).look;
+      }
       phase = "ready";
       if (look.estimate.lettersToRecord > 0 && look.key) credits = await api.credits().catch(() => null);
     } catch (e) {
@@ -91,8 +97,10 @@
           <p class="font-semibold text-ink">This will spend about {commas(cost)} ElevenLabs credits.</p>
           <p class="mt-1 text-sm text-ink-secondary">{est?.piecesToRecord === 1 ? "1 new piece" : `${est?.piecesToRecord} new pieces`} of speech to record. Each is recorded once and kept, so making this again is free.</p>
           {#each est?.byVoice ?? [] as v (v.voice)}
-            <p class="mt-1 text-sm text-ink-secondary">{v.voice}: {commas(v.letters)} letters</p>
+            <p class="mt-1 text-sm text-ink-secondary">{v.voice}: {commas(v.letters)} letters{v.credits === v.letters ? "" : `, ${commas(v.credits)} credits`}</p>
           {/each}
+          {#if est?.models.length}<p class="mt-1 text-sm text-ink-secondary" data-testid="render-models">Model: {est.models.join(", ")}</p>{/if}
+          {#if est?.ratesGuessed}<p class="mt-1 text-sm text-amber-400" data-testid="render-cost-guess">This number is a guess. ElevenLabs has not said what this model charges. The making stops before it goes over.</p>{/if}
           {#if credits}<p class="mt-2 text-sm text-ink-secondary" data-testid="render-credits-left">You have {commas(Math.max(0, credits.limit - credits.used))} credits left.</p>{/if}
         {:else}
           <p class="font-semibold text-ink">No credits will be spent.</p>
@@ -135,7 +143,7 @@
           </li>
         {/each}
       </ul>
-      {#if made.lettersRecorded > 0}<p class="text-sm text-ink-secondary">Recorded {commas(made.lettersRecorded)} letters of new speech.</p>{/if}
+      {#if made.lettersRecorded > 0}<p class="text-sm text-ink-secondary" data-testid="render-spent">Recorded {commas(made.lettersRecorded)} letters of new speech. Spent {commas(made.creditsSpent)} credits.</p>{/if}
       {#if made.hailMarySeconds}<p class="text-sm text-ink-secondary" data-testid="render-pace">One Hail Mary takes {made.hailMarySeconds.toFixed(1)} seconds. In the first video it took about 9.2. Listen before you trust a new voice.</p>{/if}
       {#each made.warnings as w (w)}
         <p class="flex gap-2 text-sm text-amber-400"><CircleAlert size={16} class="mt-0.5 shrink-0" /> {w}</p>
