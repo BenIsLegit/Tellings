@@ -1,10 +1,10 @@
 // A stand-in for ElevenLabs, for testing the voice path without spending credits.
 //
 // It answers the calls the tool makes (list voices, models and pronunciation
-// dictionaries, credits left, record speech). The speech comes from the voice
-// built into Windows, so it sounds nothing like the real thing, but it is real
-// speech at a natural pace: good enough to check timing, pace, pauses and the
-// credit guard.
+// dictionaries, credits left, record speech, record two voices as one
+// conversation). The speech comes from the voices built into Windows, so it
+// sounds nothing like the real thing, but it is real speech at a natural pace:
+// good enough to check timing, pace, pauses and the credit guard.
 //
 // It charges what each model charges (the flash model is half price) and says
 // so the way ElevenLabs does, in a "character-cost" header. It prints what each
@@ -76,6 +76,95 @@ function speak(text, voiceId) {
   };
 }
 
+// ── two voices as one conversation ──
+
+const RATE = 22050;
+
+/** Windows speech as plain samples (16 bits, one channel), always at the same rate, so two voices can be joined. */
+function speakSamples(text, voiceId) {
+  const input = path.join(tmp, "in.txt");
+  const out = path.join(tmp, "part.wav");
+  fs.writeFileSync(input, text, "utf8");
+  const pick = voiceId === "ans" ? "$v = $s.GetInstalledVoices() | Select-Object -Last 1; $s.SelectVoice($v.VoiceInfo.Name);" : "";
+  const format = `$f = New-Object System.Speech.AudioFormat.SpeechAudioFormatInfo(${RATE}, [System.Speech.AudioFormat.AudioBitsPerSample]::Sixteen, [System.Speech.AudioFormat.AudioChannel]::Mono);`;
+  const ps = `Add-Type -AssemblyName System.Speech; $s = New-Object System.Speech.Synthesis.SpeechSynthesizer; ${pick} ${format} $s.SetOutputToWaveFile('${out}', $f); $s.Speak([IO.File]::ReadAllText('${input}')); $s.Dispose()`;
+  execFileSync("powershell", ["-NoProfile", "-Command", ps]);
+  const wav = fs.readFileSync(out);
+  const data = wav.indexOf("data", 12, "latin1");
+  return wav.subarray(data + 8, data + 8 + wav.readUInt32LE(data + 4));
+}
+
+function wavOf(samples) {
+  const head = Buffer.alloc(44);
+  head.write("RIFF", 0, "latin1");
+  head.writeUInt32LE(36 + samples.length, 4);
+  head.write("WAVEfmt ", 8, "latin1");
+  head.writeUInt32LE(16, 16);
+  head.writeUInt16LE(1, 20); // plain samples
+  head.writeUInt16LE(1, 22); // one channel
+  head.writeUInt32LE(RATE, 24);
+  head.writeUInt32LE(RATE * 2, 28);
+  head.writeUInt16LE(2, 32);
+  head.writeUInt16LE(16, 34);
+  head.write("data", 36, "latin1");
+  head.writeUInt32LE(samples.length, 40);
+  return Buffer.concat([head, samples]);
+}
+
+/**
+ * Each part in its own voice, with a breath between, joined into one sound.
+ *
+ * The answer is shaped the way ElevenLabs' own example shows it: "characters"
+ * is the parts' texts run together with nothing between them, and each voice
+ * segment says where its part lies among those letters and in time. The real
+ * service does not say whether a direction's letters are counted. Here they
+ * are, and they take no time.
+ */
+function converse(inputs) {
+  const breath = 0.25;
+  const sound = [];
+  const characters = [];
+  const starts = [];
+  const ends = [];
+  const voice_segments = [];
+  let now = 0;
+  inputs.forEach((input, index) => {
+    const said = spokenPart(input.text);
+    const samples = speakSamples(said, input.voice_id);
+    const seconds = samples.length / 2 / RATE;
+    const all = [...input.text];
+    const spoken = [...said].length;
+    const unspoken = all.length - spoken;
+    const at = (k) => +(now + 0.05 + (seconds - 0.1) * (Math.min(Math.max(k - unspoken, 0), spoken) / Math.max(spoken, 1))).toFixed(3);
+    const from = characters.length;
+    all.forEach((letter, k) => {
+      characters.push(letter);
+      starts.push(at(k));
+      ends.push(at(k + 1));
+    });
+    voice_segments.push({
+      voice_id: input.voice_id,
+      start_time_seconds: +now.toFixed(3),
+      end_time_seconds: +(now + seconds).toFixed(3),
+      character_start_index: from,
+      character_end_index: characters.length,
+      dialogue_input_index: index,
+    });
+    sound.push(samples);
+    now += seconds;
+    if (index < inputs.length - 1) {
+      sound.push(Buffer.alloc(Math.round(RATE * breath) * 2));
+      now += breath;
+    }
+  });
+  return {
+    audio_base64: wavOf(Buffer.concat(sound)).toString("base64"),
+    alignment: { characters, character_start_times_seconds: starts, character_end_times_seconds: ends },
+    normalized_alignment: null,
+    voice_segments,
+  };
+}
+
 http
   .createServer((req, res) => {
     const url = new URL(req.url, "http://x");
@@ -123,6 +212,29 @@ http
         console.log(`recorded piece ${calls}: voice ${m[1]}, ${model.model_id}, ${count} letters, ${cost} credits (${credits} so far)  ${JSON.stringify(extras)}`);
         res.writeHead(200, { "content-type": "application/json", "character-cost": String(cost), "request-id": `stand-in-${calls}` });
         res.end(JSON.stringify(speak(spokenPart(text), m[1])));
+      });
+      return;
+    }
+    if (url.pathname === "/v1/text-to-dialogue/with-timestamps" && req.method === "POST") {
+      let body = "";
+      req.on("data", (c) => (body += c));
+      req.on("end", () => {
+        const { inputs, model_id, ...asked } = JSON.parse(body);
+        // Over plain requests, only these two record a conversation. Their quick kin need a live connection.
+        const model = MODELS.find((x) => x.model_id === (model_id ?? "eleven_v3") && ["eleven_v3", "eleven_v4"].includes(x.model_id));
+        if (!model) return send(400, { detail: { status: "unsupported_model", message: `The model ${model_id} cannot record a conversation.` } });
+        if (!Array.isArray(inputs) || inputs.length === 0) return send(422, { detail: [{ loc: ["body", "inputs"], msg: "Field required.", type: "missing" }] });
+        const count = inputs.reduce((n, input) => n + [...input.text].length, 0);
+        if (count > 2000) return send(422, { detail: [{ loc: ["body", "inputs"], msg: `The conversation is ${count} characters long. 2,000 is the most.`, type: "value_error" }] });
+        const cost = Math.ceil(count * model.model_rates.character_cost_multiplier);
+        calls += 1;
+        letters += count;
+        credits += cost;
+        const voices = inputs.map((input) => input.voice_id).join(" then ");
+        const extras = { format: url.searchParams.get("output_format"), ...asked, parts: inputs.map((input) => [...input.text].slice(0, 28).join("")) };
+        console.log(`recorded conversation ${calls}: voices ${voices}, ${model.model_id}, ${count} letters, ${cost} credits (${credits} so far)  ${JSON.stringify(extras)}`);
+        res.writeHead(200, { "content-type": "application/json", "character-cost": String(cost), "request-id": `stand-in-${calls}` });
+        res.end(JSON.stringify(converse(inputs)));
       });
       return;
     }
