@@ -67,8 +67,14 @@
 .pvc-beads .bead .ring { fill: none; stroke: var(--ink); stroke-width: 3; }
 .pvc-beads .bead.done .ring { stroke: var(--done); }
 .pvc-beads .bead.now .ring { stroke: var(--brass); }
-.pvc-beads .bead.gap .dot { opacity: 0; }
+
+/* A prayer said on the chain, with no bead. The mark follows the chain between
+   the two beads. Only a bead ever gets a circle. */
+.pvc-beads .bead.gap .dot,
+.pvc-beads .bead.gap.done .dot,
+.pvc-beads .bead.gap.now .dot { fill: none; stroke: var(--brass); stroke-width: 3.4; opacity: 0; }
 .pvc-beads .bead.gap.now .dot { opacity: 1; }
+.pvc-beads .bead.gap .halo { stroke-width: 1.5; stroke-linejoin: round; }
 
 /* Beads with a material. The bead you are on is always the marker color, whatever the material. */
 .pvc-beads.mat .bead.round .dot { fill: url(#pvc-mat); stroke: none; }

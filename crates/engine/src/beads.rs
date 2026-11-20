@@ -31,6 +31,10 @@ pub struct Spot {
     pub kind: SpotKind,
     pub x: f32,
     pub y: f32,
+    /// For a stretch of chain: the two beads it runs between, in the order you
+    /// reach them. The mark for it follows the chain from one to the other.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub between: Option<[String; 2]>,
 }
 
 /// Everything needed to draw the beads, in the drawing's own units.
@@ -74,7 +78,7 @@ fn five_decade(direction: Direction) -> Drawing {
         (round1(CX as f64 + side * R as f64 * a.cos()), round1(CY as f64 + R as f64 * a.sin()))
     };
     let mut spots = Vec::with_capacity(72);
-    let mut push = |id: String, kind: SpotKind, (x, y): (f32, f32)| spots.push(Spot { id, kind, x, y });
+    let mut push = |id: String, kind: SpotKind, (x, y): (f32, f32)| spots.push(Spot { id, kind, x, y, between: None });
 
     // The strand, from the cross up to the medal.
     push("cross".into(), SpotKind::Cross, (CX, 445.0));
@@ -102,6 +106,17 @@ fn five_decade(direction: Direction) -> Drawing {
         let (gap_len, frac) = if d < 5 { (U_BIG as f64, 0.45) } else { (U_MEDAL as f64, 0.36) };
         push(format!("g{d}"), SpotKind::Gap, at(u + gap_len * frac));
         u += gap_len;
+    }
+
+    // Each stretch of chain runs between two beads. Name them, so the mark for a
+    // prayer said on the chain can follow the chain instead of looking like a bead.
+    for spot in spots.iter_mut().filter(|s| s.kind == SpotKind::Gap) {
+        let d: u32 = spot.id[1..].parse().expect("gaps are g0 to g5");
+        spot.between = Some(match d {
+            0 => ["p4".into(), "p5".into()],
+            5 => ["d5b10".into(), "medal".into()],
+            _ => [format!("d{d}b10"), format!("L{}", d + 1)],
+        });
     }
 
     Drawing { view_box: [30.0, 10.0, 300.0, 478.0], loop_cx: CX, loop_cy: CY, loop_r: R, strand: [CX, 295.0, 418.0], spots }
@@ -160,6 +175,26 @@ mod tests {
         // Decade 3 sits across the top, decade 5 comes down the left.
         assert!(at("d3b5").1 < 40.0);
         assert!(at("d5b10").0 < 180.0);
+    }
+
+    #[test]
+    fn each_stretch_of_chain_runs_between_two_beads() {
+        let d = rosary();
+        let at = |id: &str| d.spots.iter().find(|s| s.id == id).unwrap_or_else(|| panic!("no spot called {id}"));
+        for gap in d.spots.iter().filter(|s| s.kind == SpotKind::Gap) {
+            let [a, b] = gap.between.clone().unwrap_or_else(|| panic!("{} does not say which beads it joins", gap.id));
+            let (a, b) = (at(&a), at(&b));
+            assert!(a.kind != SpotKind::Gap && b.kind != SpotKind::Gap);
+            // The chain's own point lies between its two beads, nearer to both than they are to each other.
+            let dist = |p: &Spot, q: &Spot| ((p.x - q.x).powi(2) + (p.y - q.y).powi(2)).sqrt();
+            assert!(dist(a, gap) < dist(a, b) && dist(gap, b) < dist(a, b), "{} is not between {} and {}", gap.id, a.id, b.id);
+        }
+        // Only the chain has this. A bead is a bead.
+        assert!(d.spots.iter().filter(|s| s.kind != SpotKind::Gap).all(|s| s.between.is_none()));
+        // The Glory Be after decade 2 is said between its tenth bead and the next big bead.
+        assert_eq!(at("g2").between, Some(["d2b10".to_string(), "L3".to_string()]));
+        assert_eq!(at("g0").between, Some(["p4".to_string(), "p5".to_string()]));
+        assert_eq!(at("g5").between, Some(["d5b10".to_string(), "medal".to_string()]));
     }
 
     #[test]

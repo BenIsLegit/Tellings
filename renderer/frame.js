@@ -154,6 +154,91 @@
     return '<g class="bead medal" data-bead="medal">' + glow + halo + shape + '<path class="inlay" d="' + inlay + '"/></g>';
   }
 
+  /**
+   * How far a bead reaches along the chain from its own middle.
+   * @param {any} p @param {any} look
+   */
+  function reach(p, look) {
+    const k = look.size || 1;
+    if (p.kind === "small") return 5 * k;
+    if (p.kind === "big") return 7.5 * k;
+    if (p.kind === "medal") return look.medal === "miraculous" ? 10.5 : 12;
+    return 0;
+  }
+
+  /**
+   * The stretch of chain between two beads, where a prayer with no bead is said.
+   * The mark for it follows the chain, so it can never be mistaken for a bead:
+   * `line` is the chain itself, from one bead's edge to the other's, and
+   * `band(h)` is a closed shape around it, `h` units to either side.
+   * @param {any} d  the drawing
+   * @param {any} a  the bead it leaves
+   * @param {any} b  the bead it reaches
+   * @param {any} look
+   * @returns {{line: string, band: (h: number, hug?: boolean) => string} | null}
+   */
+  function chainStretch(d, a, b, look) {
+    if (!a || !b) return null;
+    const ra = reach(a, look), rb = reach(b, look);
+    const onLoop = function (/** @type {any} */ p) { return Math.abs(Math.hypot(p.x - d.loopCx, p.y - d.loopCy) - d.loopR) < 0.6; };
+    // Both shapes are worked out along the chain: `s` units from bead a toward
+    // bead b, and `off` units to the side of it.
+    /** @type {number} */ let len;
+    /** @type {number} */ let sweep;
+    /** @type {(s: number, off: number) => string} */ let pt;
+    /** @type {(s: number, off: number, forward: boolean) => string} */ let to;
+    if (onLoop(a) && onLoop(b)) {
+      // Around the loop, the chain is an arc.
+      const R = d.loopR;
+      const ta = Math.atan2(a.y - d.loopCy, a.x - d.loopCx);
+      let turn = Math.atan2(b.y - d.loopCy, b.x - d.loopCx) - ta;
+      while (turn > Math.PI) turn -= 2 * Math.PI;
+      while (turn < -Math.PI) turn += 2 * Math.PI;
+      const way = turn < 0 ? -1 : 1;
+      len = Math.abs(turn) * R;
+      sweep = way > 0 ? 1 : 0;
+      pt = function (s, off) {
+        const t = ta + (way * s) / R;
+        return r1(d.loopCx + (R + off) * Math.cos(t)) + " " + r1(d.loopCy + (R + off) * Math.sin(t));
+      };
+      to = function (s, off, forward) { return "A" + r1(R + off) + " " + r1(R + off) + " 0 0 " + (forward ? sweep : 1 - sweep) + " " + pt(s, off); };
+    } else {
+      // On the strand, it is a straight line.
+      len = Math.hypot(b.x - a.x, b.y - a.y) || 1;
+      const ux = (b.x - a.x) / len, uy = (b.y - a.y) / len;
+      sweep = 1;
+      pt = function (s, off) { return r1(a.x + ux * s + uy * off) + " " + r1(a.y + uy * s - ux * off); };
+      to = function (s, off) { return "L" + pt(s, off); };
+    }
+    // Keep a sliver to mark even when big beads leave almost no chain showing.
+    const span = function (/** @type {number} */ s1, /** @type {number} */ s2) {
+      return s2 - s1 >= 0.6 ? [s1, s2] : [(s1 + s2) / 2 - 0.3, (s1 + s2) / 2 + 0.3];
+    };
+    const air = 1.2; // clear space between a bead and the outline around the chain
+    return {
+      line: (function () {
+        const e = span(ra, len - rb);
+        return "M" + pt(e[0], 0) + to(e[1], 0, true);
+      })(),
+      band: function (h, hug) {
+        if (!hug) {
+          // Round ends that reach in behind the two beads. This one is drawn under them.
+          const e = span(ra, len - rb);
+          const cap = function (/** @type {number} */ s, /** @type {number} */ off) { return "A" + h + " " + h + " 0 0 " + sweep + " " + pt(s, off); };
+          return "M" + pt(e[0], h) + to(e[1], h, true) + cap(e[1], -h) + to(e[0], -h, false) + cap(e[0], h) + "Z";
+        }
+        // The ends curve around the two beads, so the shape sits between them and touches neither.
+        const qa = ra + air, qb = rb + air;
+        const e = span(qa > h ? Math.sqrt(qa * qa - h * h) : 0, len - (qb > h ? Math.sqrt(qb * qb - h * h) : 0));
+        const end = function (/** @type {number} */ q, /** @type {number} */ s, /** @type {number} */ off) {
+          const r = r1(Math.max(q, h));
+          return "A" + r + " " + r + " 0 0 " + (1 - sweep) + " " + pt(s, off);
+        };
+        return "M" + pt(e[0], h) + to(e[1], h, true) + end(qb, e[1], -h) + to(e[0], -h, false) + end(qa, e[0], h) + "Z";
+      },
+    };
+  }
+
   const MATERIALS = {
     wood: { color: "#9A6B43", light: 22, dark: 42 },
     glass: { color: "#6FA8DC", light: 62, dark: 30 },
@@ -181,6 +266,20 @@
     }
     h += '<circle class="chain" cx="' + d.loopCx + '" cy="' + d.loopCy + '" r="' + d.loopR + '"/>' +
       '<line class="chain" x1="' + d.strand[0] + '" y1="' + d.strand[1] + '" x2="' + d.strand[0] + '" y2="' + d.strand[2] + '"/>';
+    // The chain first, so its mark sits under the beads at either end of it.
+    /** @type {Record<string, any>} */
+    const byId = {};
+    d.spots.forEach(function (/** @type {any} */ p) { byId[p.id] = p; });
+    d.spots.forEach(function (/** @type {any} */ p) {
+      if (p.kind !== "gap") return;
+      const pair = p.between || [];
+      const s = chainStretch(d, byId[pair[0]], byId[pair[1]], look);
+      if (!s) return;
+      h += '<g class="bead gap" data-bead="' + esc(p.id) + '">' +
+        '<path class="glow" d="' + s.band(9) + '"/>' +
+        '<path class="halo" d="' + s.band(5, true) + '"/>' +
+        '<path class="dot" d="' + s.line + '"/></g>';
+    });
     d.spots.forEach(function (/** @type {any} */ p) {
       const id = esc(p.id);
       if (p.kind === "small" || p.kind === "big") {
@@ -194,11 +293,6 @@
           h += '<path class="knot" d="M' + r1(p.x - q) + " " + r1(p.y - q) + "L" + r1(p.x + q) + " " + r1(p.y + q) + "M" + r1(p.x + q) + " " + r1(p.y - q) + "L" + r1(p.x - q) + " " + r1(p.y + q) + '"/>';
         }
         h += "</g>";
-      } else if (p.kind === "gap") {
-        h += '<g class="bead gap" data-bead="' + id + '">' +
-          '<circle class="glow" cx="' + p.x + '" cy="' + p.y + '" r="12"/>' +
-          '<circle class="halo" cx="' + p.x + '" cy="' + p.y + '" r="7.5"/>' +
-          '<rect class="dot" x="' + (p.x - 3) + '" y="' + (p.y - 3) + '" width="6" height="6" transform="rotate(45 ' + p.x + " " + p.y + ')"/></g>';
       } else if (p.kind === "medal") {
         h += medalMarkup(look.medal, p.x, p.y);
       } else if (p.kind === "cross") {
