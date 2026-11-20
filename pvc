@@ -1,0 +1,10 @@
+#!/usr/bin/env bash
+# Runs the pvc command-line tool from this folder, building it first if needed.
+#
+#   ./pvc list
+#   ./pvc show luminous
+#   ./pvc make luminous
+#
+# Run "./pvc help" to see everything.
+
+exec cargo run --quiet --release --manifest-path "$(dirname "$0")/Cargo.toml" -p pvc -- "$@"
