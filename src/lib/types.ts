@@ -118,9 +118,24 @@ export interface Heard {
   takes: number;
 }
 
+/** Music ElevenLabs would be asked to make, and roughly what that would cost. */
+export interface MusicCost {
+  /** True when the setup asks ElevenLabs for music and the video would use it. */
+  wanted: boolean;
+  /** Already made and kept: it costs nothing now. */
+  kept: boolean;
+  minutes: number;
+  /** Roughly what making it would cost. A rough figure: ElevenLabs does not give the price beforehand. */
+  credits: number;
+}
+
 export interface Look {
   plan: Plan;
+  /** The voice: what there is to record and what that would cost. */
   estimate: Estimate;
+  music: MusicCost;
+  /** The one number a person agrees to: the voice and the music together. */
+  credits: number;
   /** For each scene of the plan, the speech heard on it. */
   speech: Heard[][];
   key: KeySource | null;
@@ -145,8 +160,12 @@ export interface Made {
   files: { kind: string; path: string }[];
   seconds: number;
   lettersRecorded: number;
-  /** Credits the recording spent, by ElevenLabs' own count wherever it gave one. */
+  /** Credits known to have been spent: the voice, and the music where its cost could be told. */
   creditsSpent: number;
+  /** The music made this time, and what is known of its cost. Never a guess. */
+  music: { minutes: number; charged: number | null; knownBy: "reported" | "counted" | "unmoved" | "unknown"; estimate: number } | null;
+  /** The same in a sentence. */
+  musicSaid: string | null;
   pace: { voice: string; natural: number; speedup: number }[];
   hailMarySeconds: number | null;
   warnings: string[];

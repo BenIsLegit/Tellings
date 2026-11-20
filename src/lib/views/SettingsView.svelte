@@ -63,7 +63,7 @@
   async function clearSpeech() {
     const ok = await confirmDialog({
       title: "Forget all recorded speech?",
-      message: "Every prayer recorded so far will be deleted. The next video with a voice will have to record them again, and that spends credits.",
+      message: "Every prayer recorded so far will be deleted. The next video with a voice will have to record them again, and that spends credits. Music made by ElevenLabs is not deleted.",
       confirmLabel: "Delete the recordings",
       variant: "danger",
     });
@@ -118,6 +118,7 @@
     <Card title="Recorded speech" testid="settings-speech-card">
       <div class="space-y-3 text-sm text-ink-secondary">
         <p>Each prayer is recorded once per voice and kept, so it is never paid for twice. <span class="text-ink" data-testid="settings-speech-size">{megabytes(doctor?.keptSpeechBytes ?? 0)} kept.</span></p>
+        <p data-testid="settings-music-kept">Music made by ElevenLabs is kept as well. The button below leaves it alone.</p>
         <Button variant="danger" disabled={!doctor?.keptSpeechBytes} testid="settings-speech-clear-btn" onclick={clearSpeech}>Forget all recorded speech…</Button>
       </div>
     </Card>

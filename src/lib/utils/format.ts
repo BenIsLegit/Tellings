@@ -18,6 +18,14 @@ export function rateWords(rate: number): string {
   return `${Math.round(rate * 100) / 100} credits a letter`;
 }
 
+/** A length of music in words: 2 becomes "2 minutes", 0.5 "half a minute". */
+export function minutesWords(minutes: number): string {
+  const m = Math.round(minutes * 100) / 100;
+  if (Math.abs(m - 1) < 0.005) return "1 minute";
+  if (Math.abs(m - 0.5) < 0.005) return "half a minute";
+  return `${m} minutes`;
+}
+
 export function megabytes(bytes: number): string {
   return `${(bytes / 1_048_576).toFixed(1)} MB`;
 }

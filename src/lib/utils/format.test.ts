@@ -1,6 +1,13 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { joinVoices, rateWords, splitVoices } from "./format.ts";
+import { joinVoices, minutesWords, rateWords, splitVoices } from "./format.ts";
+
+test("a length of music is said in words", () => {
+  assert.equal(minutesWords(2), "2 minutes");
+  assert.equal(minutesWords(1), "1 minute");
+  assert.equal(minutesWords(0.5), "half a minute");
+  assert.equal(minutesWords(1.5), "1.5 minutes");
+});
 
 test("what a model charges is said in words", () => {
   assert.equal(rateWords(1), "1 credit a letter");

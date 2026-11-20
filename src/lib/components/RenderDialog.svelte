@@ -6,7 +6,7 @@
   import { CircleAlert, CircleCheck, FolderOpen, Loader2, Play } from "lucide-svelte";
   import { api } from "$lib/api";
   import type { Credits, Doc, Look, Made, ModelInfo, Progress } from "$lib/types";
-  import { clock, commas, fileName } from "$lib/utils/format";
+  import { clock, commas, fileName, minutesWords } from "$lib/utils/format";
   import { invokeWithToast } from "$lib/utils/errors";
   import Button from "./Button.svelte";
   import Modal from "./Modal.svelte";
@@ -23,8 +23,20 @@
   let problem = $state("");
 
   let est = $derived(look?.estimate);
-  let cost = $derived(est?.creditsToRecord ?? 0);
-  let blocked = $derived(cost > 0 && !look?.key ? "No ElevenLabs API key is saved yet. Add it under Settings, or turn the voice off." : (est?.missingRecordings.length ?? 0) > 0 ? `These recordings could not be found: ${est?.missingRecordings.join(", ")}` : "");
+  let music = $derived(look?.music);
+  /** The one number: the voice and the music together. It is the number on the button, and the number approved. */
+  let cost = $derived(look?.credits ?? 0);
+  let newSpeech = $derived((est?.lettersToRecord ?? 0) > 0);
+  let newMusic = $derived((music?.credits ?? 0) > 0);
+  let blocked = $derived(
+    cost > 0 && !look?.key
+      ? newSpeech
+        ? "No ElevenLabs API key is saved yet. Add it under Settings, or turn the voice off."
+        : "No ElevenLabs API key is saved yet. Add it under Settings, or take the words for the music out."
+      : (est?.missingRecordings.length ?? 0) > 0
+        ? `These recordings could not be found: ${est?.missingRecordings.join(", ")}`
+        : "",
+  );
   const KIND: Record<string, string> = { video: "Video", sound: "Sound only", captions: "Captions", guide: "Tap-through guide" };
 
   async function check() {
@@ -46,7 +58,7 @@
         }
       }
       phase = "ready";
-      if (look.estimate.lettersToRecord > 0 && look.key) credits = await api.credits().catch(() => null);
+      if (look.credits > 0 && look.key) credits = await api.credits().catch(() => null);
     } catch (e) {
       problem = String(e);
       phase = "failed";
@@ -100,16 +112,26 @@
       <div class="rounded-lg border p-4 {cost > 0 ? 'border-amber-700/60 bg-amber-900/20' : 'border-edge bg-canvas'}" data-testid="render-cost">
         {#if cost > 0}
           <p class="font-semibold text-ink">This will spend about {commas(cost)} ElevenLabs credits.</p>
-          <p class="mt-1 text-sm text-ink-secondary">{est?.piecesToRecord === 1 ? "1 new piece" : `${est?.piecesToRecord} new pieces`} of speech to record. Each is recorded once and kept, so making this again is free.</p>
-          {#each est?.byVoice ?? [] as v (v.voice)}
-            <p class="mt-1 text-sm text-ink-secondary">{v.voice}: {commas(v.letters)} letters{v.credits === v.letters ? "" : `, ${commas(v.credits)} credits`}</p>
-          {/each}
-          {#if est?.models.length}<p class="mt-1 text-sm text-ink-secondary" data-testid="render-models">Model: {est.models.map((id) => models.find((m) => m.id === id)?.name ?? id).join(", ")}</p>{/if}
-          {#if est?.ratesGuessed}<p class="mt-1 text-sm text-amber-400" data-testid="render-cost-guess">This number is a guess. ElevenLabs has not said what this model charges. The making stops before it goes over.</p>{/if}
+          {#if newSpeech && newMusic}
+            <p class="mt-1 text-sm text-ink-secondary" data-testid="render-cost-parts">About {commas(est?.creditsToRecord ?? 0)} for the voice and about {commas(music?.credits ?? 0)} for the music.</p>
+          {/if}
+          {#if newSpeech}
+            <p class="mt-1 text-sm text-ink-secondary">{est?.piecesToRecord === 1 ? "1 new piece" : `${est?.piecesToRecord} new pieces`} of speech to record. Each is recorded once and kept, so making this again is free.</p>
+            {#each est?.byVoice ?? [] as v (v.voice)}
+              <p class="mt-1 text-sm text-ink-secondary">{v.voice}: {commas(v.letters)} letters{v.credits === v.letters ? "" : `, ${commas(v.credits)} credits`}</p>
+            {/each}
+            {#if est?.models.length}<p class="mt-1 text-sm text-ink-secondary" data-testid="render-models">Model: {est.models.map((id) => models.find((m) => m.id === id)?.name ?? id).join(", ")}</p>{/if}
+            {#if est?.ratesGuessed}<p class="mt-1 text-sm text-amber-400" data-testid="render-cost-guess">This number is a guess. ElevenLabs has not said what this model charges. The making stops before it goes over.</p>{/if}
+          {/if}
+          {#if newMusic && music}
+            <p class="mt-1 text-sm text-ink-secondary" data-testid="render-music-cost">{minutesWords(music.minutes)} of music for ElevenLabs to make. It is made once and kept, so making this again is free.</p>
+            <p class="mt-1 text-sm text-amber-400" data-testid="render-music-rough">The music's part is a rough figure. ElevenLabs does not give the price before it makes music. Afterwards you are told what it came to.</p>
+          {/if}
           {#if credits}<p class="mt-2 text-sm text-ink-secondary" data-testid="render-credits-left">You have {commas(Math.max(0, credits.limit - credits.used))} credits left.</p>{/if}
         {:else}
           <p class="font-semibold text-ink">No credits will be spent.</p>
           <p class="mt-1 text-sm text-ink-secondary">{(est?.lettersKept ?? 0) > 0 ? "Every piece of speech is already recorded and kept." : "This one has no generated voice."}</p>
+          {#if music?.wanted && music.kept}<p class="mt-1 text-sm text-ink-secondary" data-testid="render-music-kept">The music is already made and kept.</p>{/if}
         {/if}
       </div>
 
@@ -148,7 +170,8 @@
           </li>
         {/each}
       </ul>
-      {#if made.lettersRecorded > 0}<p class="text-sm text-ink-secondary" data-testid="render-spent">Recorded {commas(made.lettersRecorded)} letters of new speech. Spent {commas(made.creditsSpent)} credits.</p>{/if}
+      {#if made.lettersRecorded > 0}<p class="text-sm text-ink-secondary" data-testid="render-spent">Recorded {commas(made.lettersRecorded)} letters of new speech. Spent {commas(made.creditsSpent - (made.music?.charged ?? 0))} credits.</p>{/if}
+      {#if made.musicSaid}<p class="text-sm text-ink-secondary" data-testid="render-music-spent">{made.musicSaid}</p>{/if}
       {#if made.hailMarySeconds}<p class="text-sm text-ink-secondary" data-testid="render-pace">One Hail Mary takes {made.hailMarySeconds.toFixed(1)} seconds. In the first video it took about 9.2. Listen before you trust a new voice.</p>{/if}
       {#each made.warnings as w (w)}
         <p class="flex gap-2 text-sm text-amber-400"><CircleAlert size={16} class="mt-0.5 shrink-0" /> {w}</p>
