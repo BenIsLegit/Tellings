@@ -1,9 +1,14 @@
 // A stand-in for ElevenLabs, for testing the voice path without spending credits.
 //
-// It answers the three calls the tool makes (list voices, credits left, record
-// speech). The speech comes from the voice built into Windows, so it sounds
-// nothing like the real thing, but it is real speech at a natural pace: good
-// enough to check timing, pace, pauses and the credit guard.
+// It answers the calls the tool makes (list voices, models and pronunciation
+// dictionaries, credits left, record speech). The speech comes from the voice
+// built into Windows, so it sounds nothing like the real thing, but it is real
+// speech at a natural pace: good enough to check timing, pace, pauses and the
+// credit guard.
+//
+// It charges what each model charges (the flash model is half price) and says
+// so the way ElevenLabs does, in a "character-cost" header. It prints what each
+// request asked for, so you can see that a setting reached it.
 //
 // Windows only. Run it, then point the tool at it in another terminal:
 //
@@ -27,6 +32,30 @@ const KEY = "fake-key";
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "stand-in-elevenlabs-"));
 let calls = 0;
 let letters = 0;
+let credits = 0;
+
+// A made-up price list in the shape ElevenLabs sends. "eleven_dear" costs double, to test the guard.
+const MODELS = [
+  { model_id: "eleven_v4", name: "Eleven v4", description: "Stand-in for the newest model. Takes direction.", rate: 1, max: 100000, style: false, boost: false },
+  { model_id: "eleven_v3", name: "Eleven v3", description: "Stand-in for the model before it. Takes direction.", rate: 1, max: 5000, style: false, boost: false },
+  { model_id: "eleven_multilingual_v2", name: "Eleven Multilingual v2", description: "Stand-in for the model the first video used.", rate: 1, max: 10000, style: true, boost: true },
+  { model_id: "eleven_flash_v2_5", name: "Eleven Flash v2.5", description: "Stand-in for the fast, half-price model.", rate: 0.5, max: 40000, style: false, boost: false },
+  { model_id: "eleven_dear", name: "Eleven Dear", description: "Not a real model. Charges double.", rate: 2, max: 10000, style: true, boost: true },
+  { model_id: "eleven_multilingual_sts_v2", name: "Voice changer", description: "Does not turn text into speech.", rate: 1, max: 10000, speech: false },
+].map((m) => ({
+  model_id: m.model_id,
+  name: m.name,
+  description: m.description,
+  can_do_text_to_speech: m.speech !== false,
+  can_use_style: !!m.style,
+  can_use_speaker_boost: !!m.boost,
+  maximum_text_length_per_request: m.max,
+  languages: [{ language_id: "en", name: "English" }],
+  model_rates: { character_cost_multiplier: m.rate },
+}));
+
+/** A direction like "[reverent] " in front is not spoken, as with Eleven v3 and v4. */
+const spokenPart = (text) => text.replace(/^(\s*\[[^\]]*\])+\s*/, "");
 
 function speak(text, voiceId) {
   const input = path.join(tmp, "in.txt");
@@ -58,23 +87,37 @@ http
     if (url.pathname === "/v2/voices") {
       return send(200, {
         voices: [
-          { voice_id: "imp", name: "Imperial - Male", category: "generated" },
-          { voice_id: "ans", name: "Answer", category: "premade" },
+          { voice_id: "imp", name: "Imperial - Male", category: "generated", settings: { stability: 0.5, similarity_boost: 0.75, style: 0, use_speaker_boost: true, speed: 1 } },
+          { voice_id: "ans", name: "Answer", category: "premade", settings: { stability: 0.35, similarity_boost: 0.8, style: 0.1, use_speaker_boost: false, speed: 1 } },
         ],
         has_more: false,
       });
     }
-    if (url.pathname === "/v1/user/subscription") return send(200, { character_count: letters, character_limit: 100000 });
+    if (url.pathname === "/v1/models") return send(200, MODELS);
+    if (url.pathname === "/v1/pronunciation-dictionaries") {
+      return send(200, { pronunciation_dictionaries: [{ id: "dict1", name: "Prayers", latest_version_id: "ver3", latest_version_rules_num: 2 }], has_more: false });
+    }
+    if (url.pathname === "/v1/user/subscription") {
+      const nextMonth = Math.floor(Date.now() / 1000) + 30 * 86400;
+      return send(200, { character_count: credits, character_limit: 100000, tier: "stand-in", next_character_count_reset_unix: nextMonth });
+    }
     const m = url.pathname.match(/^\/v1\/text-to-speech\/([^/]+)\/with-timestamps$/);
     if (m && req.method === "POST") {
       let body = "";
       req.on("data", (c) => (body += c));
       req.on("end", () => {
-        const { text } = JSON.parse(body);
+        const { text, model_id, ...asked } = JSON.parse(body);
+        const model = MODELS.find((x) => x.model_id === (model_id ?? "eleven_multilingual_v2") && x.can_do_text_to_speech);
+        if (!model) return send(400, { detail: { status: "model_not_found", message: `There is no speech model called ${model_id}.` } });
+        const count = [...text].length;
+        const cost = Math.ceil(count * model.model_rates.character_cost_multiplier);
         calls += 1;
-        letters += [...text].length;
-        console.log(`recorded piece ${calls}: voice ${m[1]}, ${[...text].length} letters (${letters} so far)`);
-        send(200, speak(text, m[1]));
+        letters += count;
+        credits += cost;
+        const extras = { format: url.searchParams.get("output_format"), ...asked };
+        console.log(`recorded piece ${calls}: voice ${m[1]}, ${model.model_id}, ${count} letters, ${cost} credits (${credits} so far)  ${JSON.stringify(extras)}`);
+        res.writeHead(200, { "content-type": "application/json", "character-cost": String(cost), "request-id": `stand-in-${calls}` });
+        res.end(JSON.stringify(speak(spokenPart(text), m[1])));
       });
       return;
     }
