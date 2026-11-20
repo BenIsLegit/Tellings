@@ -88,6 +88,7 @@ pub fn run() {
             commands::voice::key_set,
             commands::voice::key_clear,
             commands::voice::voices,
+            commands::voice::voice_settings,
             commands::voice::models,
             commands::voice::credits,
             commands::render::render_start,

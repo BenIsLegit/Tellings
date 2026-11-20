@@ -157,8 +157,15 @@ export interface VoiceInfo {
   name: string;
   category?: string | null;
   description?: string | null;
-  /** The voice's own settings, used wherever a setup leaves one unset. */
-  settings?: { stability?: number | null; similarity?: number | null; style?: number | null; speakerBoost?: boolean | null; speed?: number | null } | null;
+}
+
+/** How a voice is set to speak at ElevenLabs: what is used wherever a setup leaves a setting unset. */
+export interface OwnSettings {
+  stability?: number | null;
+  similarity?: number | null;
+  style?: number | null;
+  speakerBoost?: boolean | null;
+  speed?: number | null;
 }
 
 /** One ElevenLabs model that turns text into speech. */

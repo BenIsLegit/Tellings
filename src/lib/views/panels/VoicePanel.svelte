@@ -9,7 +9,7 @@
   import VoicePicker from "$lib/components/VoicePicker.svelte";
   import { confirmDialog } from "$lib/stores/confirm";
   import { editor } from "$lib/stores/editor.svelte";
-  import type { Heard, ModelInfo, VoiceInfo } from "$lib/types";
+  import type { Heard, ModelInfo, OwnSettings } from "$lib/types";
   import { invokeWithToast } from "$lib/utils/errors";
   import { commas, joinVoices, rateWords, splitVoices } from "$lib/utils/format";
 
@@ -22,12 +22,10 @@
   let current = $derived(picking === "voice.respond" ? String(editor.valueFor("voice.respond", editor.activeTarget) ?? "") : picking === "voice.name" ? (names[0] ?? "") : "");
   let fresh = $derived(!!editor.valueFor("voice.freshEachTime", editor.activeTarget));
 
-  // What ElevenLabs offers, and how each voice is set up there. Both are free
-  // to ask and kept for a day. With no key saved there is nothing to show, and
-  // the panel works without them.
+  // What ElevenLabs offers, and how the voice is set up there. Both are free to
+  // ask. With no key saved there is nothing to show, and the panel works without them.
   let pickingModel = $state(false);
   let models = $state<ModelInfo[]>([]);
-  let voices = $state<VoiceInfo[]>([]);
   $effect(() => {
     api
       .models()
@@ -37,16 +35,25 @@
         if (editor.look?.estimate.ratesGuessed) editor.refresh();
       })
       .catch(() => {});
-    api
-      .voices()
-      .then((list) => (voices = list))
-      .catch(() => {});
   });
 
   let model = $derived(String(editor.valueFor("voice.model", editor.activeTarget) ?? ""));
   let modelInfo = $derived(models.find((m) => m.id === model));
-  /** The settings the leading voice has at ElevenLabs: what is used where this setup says nothing. */
-  let own = $derived(voices.find((v) => v.name === names[0])?.settings ?? null);
+
+  /** The settings each voice has at ElevenLabs, as far as they have been asked for. null = asked, and not to be had. */
+  let asked = $state<Record<string, OwnSettings | null>>({});
+  let leader = $derived(names[0] ?? "");
+  /** The leading voice's own settings: what is used where this setup says nothing. */
+  let own = $derived(asked[leader] ?? null);
+  $effect(() => {
+    const name = leader;
+    if (!name || name in asked) return;
+    asked[name] = null;
+    api
+      .voiceSettings(name)
+      .then((settings) => (asked[name] = settings))
+      .catch(() => {});
+  });
 
   /** A control the chosen model does not use is put away, unless it is set, so it can still be put back. */
   const shows = (path: string, usable: boolean | undefined) => usable !== false || editor.valueFor(path, editor.activeTarget) != null;

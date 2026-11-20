@@ -1,7 +1,7 @@
 // Every call the window makes to the engine. The window itself never touches
 // files, the network or the password store.
 import { invoke } from "@tauri-apps/api/core";
-import type { Checked, Credits, Doc, Doctor, Entry, KeySource, Made, ModelInfo, Options, Settings, VoiceInfo } from "./types";
+import type { Checked, Credits, Doc, Doctor, Entry, KeySource, Made, ModelInfo, Options, OwnSettings, Settings, VoiceInfo } from "./types";
 
 export const api = {
   libraryList: () => invoke<{ presets: Entry[]; saved: Entry[] }>("library_list"),
@@ -19,6 +19,8 @@ export const api = {
   keySet: (key: string) => invoke<Credits>("key_set", { key }),
   keyClear: () => invoke<void>("key_clear"),
   voices: (refresh = false) => invoke<VoiceInfo[]>("voices", { refresh }),
+  /** How one voice is set to speak at ElevenLabs, by its name. Free. */
+  voiceSettings: (voice: string) => invoke<OwnSettings>("voice_settings", { voice }),
   /** The ElevenLabs models and what each charges. Free. Also brings the costs shown up to date. */
   models: (refresh = false) => invoke<ModelInfo[]>("models", { refresh }),
   credits: () => invoke<Credits | null>("credits"),

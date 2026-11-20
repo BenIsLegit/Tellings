@@ -2,7 +2,7 @@
 
 use crate::error::{off_thread, AppError, AppResult};
 use crate::AppState;
-use pvc_engine::elevenlabs::{Client, Credits, ModelInfo, VoiceInfo};
+use pvc_engine::elevenlabs::{Client, Credits, ModelInfo, OwnSettings, VoiceInfo};
 use pvc_engine::secrets::{self, KeySource};
 use pvc_engine::speech;
 use tauri::State;
@@ -42,6 +42,20 @@ pub async fn voices(state: State<'_, AppState>, refresh: bool) -> AppResult<Vec<
             return Err(AppError::Other("No ElevenLabs API key is saved yet. Add it under Settings.".into()));
         };
         Ok(speech::voices(&paths, &client(&key)?, refresh)?)
+    })
+    .await
+}
+
+/// How one voice is set to speak at ElevenLabs, by its name. The editor
+/// shows these beside the controls a setup leaves unset.
+#[tauri::command]
+pub async fn voice_settings(state: State<'_, AppState>, voice: String) -> AppResult<OwnSettings> {
+    let paths = state.paths.clone();
+    off_thread(move || {
+        let Some((key, _)) = secrets::key()? else {
+            return Err(AppError::Other("No ElevenLabs API key is saved yet. Add it under Settings.".into()));
+        };
+        Ok(speech::own_settings(&paths, &client(&key)?, &voice)?)
     })
     .await
 }

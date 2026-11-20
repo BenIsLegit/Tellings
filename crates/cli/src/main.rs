@@ -29,6 +29,7 @@ pvc - make a follow-along prayer video
   pvc export [setup] [changes]   print the whole setup, every setting filled in
   pvc options                    every setting and its choices
   pvc voices                     the voices in your ElevenLabs account
+  pvc voices \"Name\"              how that voice is set to speak at ElevenLabs
   pvc models                     the ElevenLabs models, and what each charges
   pvc dictionaries               the pronunciation dictionaries in your account
   pvc credits                    credits left in your ElevenLabs account
@@ -467,6 +468,22 @@ fn run(a: Args) -> Result<i32> {
         }
 
         "options" | "settings" => print!("{}", if a.markdown { reference::markdown() } else { reference::text() }),
+
+        // One voice: how it is set up at ElevenLabs, which is what a setup gets where it says nothing.
+        "voices" if first.is_some() => {
+            let name = first.unwrap_or_default();
+            let own = speech::own_settings(&paths, &need_client()?, name)?;
+            if a.json {
+                return print_json(&own).map(|_| 0);
+            }
+            let number = |v: Option<f32>| v.map(|v| ((v * 100.0).round() / 100.0).to_string()).unwrap_or_else(|| "not set".into());
+            println!("\"{name}\" is set up at ElevenLabs like this. A setup that says nothing gets these.");
+            println!("  voice.stability      {}", number(own.stability));
+            println!("  voice.similarity     {}", number(own.similarity));
+            println!("  voice.style          {}", number(own.style));
+            println!("  voice.speakerBoost   {}", own.speaker_boost.map(|b| b.to_string()).unwrap_or_else(|| "not set".into()));
+            println!("  voice.modelSpeed     {}", number(own.speed));
+        }
 
         "voices" => {
             let list = speech::voices(&paths, &need_client()?, a.refresh)?;

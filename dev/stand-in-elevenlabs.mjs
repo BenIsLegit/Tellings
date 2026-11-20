@@ -87,11 +87,16 @@ http
     if (url.pathname === "/v2/voices") {
       return send(200, {
         voices: [
-          { voice_id: "imp", name: "Imperial - Male", category: "generated", settings: { stability: 0.5, similarity_boost: 0.75, style: 0, use_speaker_boost: true, speed: 1 } },
-          { voice_id: "ans", name: "Answer", category: "premade", settings: { stability: 0.35, similarity_boost: 0.8, style: 0.1, use_speaker_boost: false, speed: 1 } },
+          { voice_id: "imp", name: "Imperial - Male", category: "generated", settings: null },
+          { voice_id: "ans", name: "Answer", category: "premade", settings: null },
         ],
         has_more: false,
       });
+    }
+    // How one voice is set up. The real list of voices does not carry this, so the tool asks voice by voice.
+    if (/^\/v1\/voices\/[^/]+\/settings$/.test(url.pathname)) {
+      const own = url.pathname.includes("/ans/") ? { stability: 0.35, similarity_boost: 0.8, style: 0.1, use_speaker_boost: false, speed: 1 } : { stability: 0.5, similarity_boost: 0.75, style: 0, use_speaker_boost: true, speed: 1 };
+      return send(200, own);
     }
     if (url.pathname === "/v1/models") return send(200, MODELS);
     if (url.pathname === "/v1/pronunciation-dictionaries") {

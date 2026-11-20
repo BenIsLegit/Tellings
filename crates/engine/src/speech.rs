@@ -16,7 +16,7 @@
 //! What a piece costs depends on the model: most charge one credit a letter,
 //! the fast ones half. `Rates` holds what ElevenLabs last said each one charges.
 
-use crate::elevenlabs::{takes_direction, Alignment, Client, DictionaryInfo, ModelInfo, SpeechRequest, VoiceInfo, MP3};
+use crate::elevenlabs::{takes_direction, Alignment, Client, DictionaryInfo, ModelInfo, OwnSettings, SpeechRequest, VoiceInfo, MP3};
 use crate::error::{Error, Result};
 use crate::paths::Paths;
 use crate::plan::{find_file, Plan, SceneKind, FIRST_VIDEO_PACE};
@@ -502,6 +502,8 @@ pub fn estimate(paths: &Paths, script: &Script) -> Estimate {
 
 /// Things about the models worth telling the person before they pay: a model
 /// ElevenLabs does not have, or a setting the chosen model does not use.
+/// Both the app and `pvc` show these, so they name a setting the way a person
+/// would say it, not by its path.
 pub fn notes(paths: &Paths, script: &Script) -> Vec<String> {
     let rates = Rates::kept(paths);
     let mut out: Vec<String> = Vec::new();
@@ -514,19 +516,20 @@ pub fn notes(paths: &Paths, script: &Script) -> Vec<String> {
         let Source::Speech { voice, .. } = &clip.source else { continue };
         let model = &voice.model;
         if voice.direction.is_some() && !takes_direction(model) {
-            say(format!("The model \"{model}\" does not take direction, so voice.direction is left out there. Eleven v3 and v4 take it."));
+            let name = rates.model(model).map(|m| m.name.as_str()).unwrap_or(model);
+            say(format!("{name} does not take direction, so the direction is left out there. Eleven v3 and v4 take it."));
         }
         let Some(info) = rates.model(model) else {
             if rates.known() {
-                say(format!("ElevenLabs does not list a speech model called \"{model}\" for your account. Pick another under voice.model. See them with: pvc models"));
+                say(format!("ElevenLabs does not list a speech model called \"{model}\" for your account. Pick another model."));
             }
             continue;
         };
         if voice.style.is_some() && !info.can_use_style {
-            say(format!("{} does not use voice.style. Put that setting back, or ElevenLabs may refuse it.", info.name));
+            say(format!("{} does not use the style setting. Put it back, or ElevenLabs may refuse it.", info.name));
         }
         if voice.speaker_boost.is_some() && !info.can_use_speaker_boost {
-            say(format!("{} does not use voice.speakerBoost. Put that setting back, or ElevenLabs may refuse it.", info.name));
+            say(format!("{} does not use speaker boost. Put it back, or ElevenLabs may refuse it.", info.name));
         }
     }
     out
@@ -672,6 +675,13 @@ fn voice_id(paths: &Paths, client: &Client, voice: &VoiceRef, known: &mut Option
     }
     let names: Vec<&str> = known.as_ref().unwrap().iter().map(|v| v.name.as_str()).take(40).collect();
     Err(Error::voice(format!("There is no voice called \"{}\" in your ElevenLabs account. Your voices include: {}.", voice.name, names.join(", "))))
+}
+
+/// How a voice is set to speak at ElevenLabs, by its name: what is used
+/// wherever a setup leaves a setting unset. Free to ask.
+pub fn own_settings(paths: &Paths, client: &Client, name: &str) -> Result<OwnSettings> {
+    let voice = VoiceRef { name: name.to_string(), ..Default::default() };
+    client.voice_settings(&voice_id(paths, client, &voice, &mut None)?)
 }
 
 /// The account's dictionaries that go by these names, as (id, version), in the order asked for.

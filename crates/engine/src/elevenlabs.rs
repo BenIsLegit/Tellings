@@ -58,7 +58,8 @@ pub struct VoiceInfo {
     pub description: Option<String>,
     #[serde(default, alias = "preview_url")]
     pub preview_url: Option<String>,
-    /// The voice's own settings, used wherever a setup leaves one unset.
+    /// The voice's own settings, when the list carries them. It often does
+    /// not: `Client::voice_settings` asks for one voice's.
     #[serde(default, deserialize_with = "if_it_fits")]
     pub settings: Option<OwnSettings>,
 }
@@ -255,6 +256,13 @@ impl Client {
         Ok(out)
     }
 
+    /// How one voice is set to speak at ElevenLabs: what is used wherever a
+    /// setup leaves a setting unset.
+    pub fn voice_settings(&self, voice_id: &str) -> Result<OwnSettings> {
+        let body: Value = self.check(self.get(&format!("/v1/voices/{voice_id}/settings")).send()?)?.json()?;
+        Ok(serde_json::from_value(body).unwrap_or_default())
+    }
+
     /// Every model that turns text into speech, in the order ElevenLabs lists them.
     pub fn models(&self) -> Result<Vec<ModelInfo>> {
         let body: Value = self.check(self.get("/v1/models").send()?)?.json()?;
@@ -430,6 +438,14 @@ mod tests {
         // The list is kept on disk in the tool's own words, and reads back the same.
         let kept: Vec<VoiceInfo> = serde_json::from_str(&serde_json::to_string(&voices).unwrap()).unwrap();
         assert_eq!(kept, voices);
+    }
+
+    #[test]
+    fn a_voice_s_own_settings() {
+        let mut server = mockito::Server::new();
+        server.mock("GET", "/v1/voices/v1/settings").match_header("xi-api-key", "k").with_body(r#"{"stability":0.45,"similarity_boost":0.8,"style":0.0,"use_speaker_boost":true,"speed":1.0}"#).create();
+        let own = Client::with_base("k", &server.url()).unwrap().voice_settings("v1").unwrap();
+        assert_eq!(own, OwnSettings { stability: Some(0.45), similarity: Some(0.8), style: Some(0.0), speaker_boost: Some(true), speed: Some(1.0) });
     }
 
     #[test]

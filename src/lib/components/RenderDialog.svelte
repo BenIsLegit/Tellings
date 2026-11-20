@@ -5,7 +5,7 @@
   import { listen } from "@tauri-apps/api/event";
   import { CircleAlert, CircleCheck, FolderOpen, Loader2, Play } from "lucide-svelte";
   import { api } from "$lib/api";
-  import type { Credits, Doc, Look, Made, Progress } from "$lib/types";
+  import type { Credits, Doc, Look, Made, ModelInfo, Progress } from "$lib/types";
   import { clock, commas, fileName } from "$lib/utils/format";
   import { invokeWithToast } from "$lib/utils/errors";
   import Button from "./Button.svelte";
@@ -16,6 +16,8 @@
   let phase = $state<"checking" | "ready" | "working" | "done" | "failed">("checking");
   let look = $state<Look | null>(null);
   let credits = $state<Credits | null>(null);
+  /** What ElevenLabs offers, for showing a model by its name. */
+  let models = $state<ModelInfo[]>([]);
   let progress = $state<Progress | null>(null);
   let made = $state<Made | null>(null);
   let problem = $state("");
@@ -38,7 +40,10 @@
         // What each model charges, asked of ElevenLabs (free, kept for a day), so
         // the number on the button is the number it will come to.
         const asked = await api.models().catch(() => null);
-        if (asked) look = (await api.setupLook(doc)).look;
+        if (asked) {
+          models = asked;
+          look = (await api.setupLook(doc)).look;
+        }
       }
       phase = "ready";
       if (look.estimate.lettersToRecord > 0 && look.key) credits = await api.credits().catch(() => null);
@@ -99,7 +104,7 @@
           {#each est?.byVoice ?? [] as v (v.voice)}
             <p class="mt-1 text-sm text-ink-secondary">{v.voice}: {commas(v.letters)} letters{v.credits === v.letters ? "" : `, ${commas(v.credits)} credits`}</p>
           {/each}
-          {#if est?.models.length}<p class="mt-1 text-sm text-ink-secondary" data-testid="render-models">Model: {est.models.join(", ")}</p>{/if}
+          {#if est?.models.length}<p class="mt-1 text-sm text-ink-secondary" data-testid="render-models">Model: {est.models.map((id) => models.find((m) => m.id === id)?.name ?? id).join(", ")}</p>{/if}
           {#if est?.ratesGuessed}<p class="mt-1 text-sm text-amber-400" data-testid="render-cost-guess">This number is a guess. ElevenLabs has not said what this model charges. The making stops before it goes over.</p>{/if}
           {#if credits}<p class="mt-2 text-sm text-ink-secondary" data-testid="render-credits-left">You have {commas(Math.max(0, credits.limit - credits.used))} credits left.</p>{/if}
         {:else}
