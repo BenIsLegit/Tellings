@@ -49,6 +49,7 @@ On Windows run `.\pvc.bat`. On macOS or Linux run `./pvc`. The first run builds 
 --model eleven_flash_v2_5                the ElevenLabs model that speaks (see pvc models)
 --no-voice                               words on screen only, no credits
 --screen tv-1080p                        see pvc options for the sizes
+--set room.kind=church                   the voice in a room: chapel | church | cathedral. No credits
 --to "C:\some\folder"                    where the files go
 --set words.follow=true                  any setting from pvc options
 --rule "mystery=3: voice.name=Bella"     a setting for only part of the video
@@ -155,6 +156,7 @@ A setup is a small JSON file that holds only what differs from the defaults. The
 - **`renderer/frame.js` draws from the plan and decides nothing.** It is a plain script: no imports, no build step. The engine puts it in a page and photographs it with Chrome or Edge, with no window (`frames.rs`, `cdp.rs`). The app's preview loads the same file (`Preview.svelte`).
 - **The window works nothing out.** After every change the editor (`src/lib/stores/editor.svelte.ts`) sends the sparse setup to `setup_look` and shows the plan and the cost that come back.
 - **Sound sets the timing.** Each still is held for as long as its sound lasts. With no voice, the pace settings say how long.
+- **A room is added last.** `audio::master` lays a room's echo over the finished voice track, before any music. `room.rs` works the echo out from a few numbers, and FFmpeg's `afir` applies it. It touches no recording and no timing, so it costs nothing and is in no cache key. With `room.kind = none` the sound is sample for sample what it was.
 - **One gate for credits.** `make::look` is free. `make::make` stops with `NeedsApproval` unless the approved number covers the credits still to spend. That is letters times what each model charges (`Rates` in `speech.rs`, read from the list `speech::models` fetches and keeps for a day). `speech::record` is the second lock: it adds up what ElevenLabs says it charged, and stops before going over the number.
 - **Only `Client::speak` spends.** Every other call to ElevenLabs is a free list or lookup. `speak` tries again only after a "busy" answer, when nothing was recorded. Never retry it after any other failure: a recording may have been made and paid for.
 

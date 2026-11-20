@@ -48,6 +48,7 @@ Every setting has a default. The exact names and choices are in [settings.md](se
 - A voice that drops out after the first few Hail Marys of each decade.
 - No voice at all.
 - Background music or chant that you supply.
+- A room for the voice: a chapel, a church or a cathedral. The echo rings on into the pauses. It is added to the finished sound, so it costs no credits and nothing is recorded again.
 - Every recording is made once and kept. Nothing spends credits without a yes that names the number.
 - The number comes from the model's own price, and the making stops before it goes over. Afterwards it says what ElevenLabs really charged.
 
@@ -109,5 +110,6 @@ Every setting has a default. The exact names and choices are in [settings.md](se
 
 - **A real ElevenLabs voice.** The voice path was tested against a stand-in service, not a real account. The first real video is the test. Listen to it before trusting it.
 - **The newer models and controls, with real credits.** The lists (models, prices, voices, credits left) were checked against a real ElevenLabs account. Recording with a different model, a direction, a seed, high quality or a dictionary was checked against the stand-in only. Try one short prayer first and listen. A direction is the least sure: if ElevenLabs ever reads it aloud, take it out.
+- **How the rooms sound.** They were checked by measuring, not by ear: the echo is there, it fades as fast as each room should, and no timing changes. Listen to one prayer in a room before you make a whole video with it.
 - **How different two takes sound.** ElevenLabs reads the same words a little differently each time it is asked. The stand-in does not, so takes were checked by count, not by ear. Try a few takes of the Hail Mary before paying for more.
 - **macOS and Linux.** Built and tested on Windows only.

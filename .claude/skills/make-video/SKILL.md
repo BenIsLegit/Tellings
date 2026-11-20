@@ -19,6 +19,7 @@ Common changes:
 --mysteries joyful | sorrowful | glorious | luminous | today
 --voice "Name"            --no-voice            --screen tv-1080p
 --set words.follow=true   --to "C:\folder"
+--set room.kind=church    the voice in a room: chapel | church | cathedral (free)
 --rule "mystery=3: voice.name=Bella"        one mystery
 --rule "prayer=ourfather: voice.name=George" one kind of prayer
 --rule "bead=d3b10: voice.name=Sarah"        one bead
