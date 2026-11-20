@@ -30,6 +30,29 @@
     <Setting path="music.volume" label="How loud" kind="number" min={0} max={1} step={0.01} />
   </Group>
 
+  <Group
+    title="A room for the voice"
+    folded
+    testid="output-room-group"
+    note="Puts the voice in a room, with the echo ringing into the pauses. It is added to the finished sound, so it costs no credits and nothing is recorded again."
+  >
+    <Setting
+      path="room.kind"
+      label="Room"
+      kind="select"
+      options={[
+        ["none", "No room"],
+        ["chapel", "A chapel"],
+        ["church", "A church"],
+        ["cathedral", "A cathedral"],
+      ]}
+      help="No room is the first video. A chapel's echo is gone in about a second. A cathedral's lasts four or five."
+    />
+    {#if editor.setup?.room?.kind && editor.setup.room.kind !== "none"}
+      <Setting path="room.amount" label="How much" kind="number" min={0} max={1} step={0.05} help="0.3 is a clear echo behind the voice. 1 is an echo as loud as the voice. A long echo makes fast speech harder to follow, so keep it low in a cathedral." />
+    {/if}
+  </Group>
+
   <Group title="Picture quality" folded testid="output-quality-group">
     <Setting path="output.quality" label="Quality" kind="number" min={12} max={30} slider={false} help="Lower is sharper and a bigger file. 18 is the first video." />
   </Group>
