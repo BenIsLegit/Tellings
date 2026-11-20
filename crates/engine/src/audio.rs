@@ -54,6 +54,18 @@ fn now(buf: &[i16]) -> f32 {
     buf.len() as f32 / SR as f32
 }
 
+/// A number from -1 to 1 for each scene. It looks like chance and is not: the
+/// same scene always gets the same number, so a video comes out the same twice.
+fn sway(scene: usize) -> f32 {
+    let mut x = (scene as u64).wrapping_add(1).wrapping_mul(0x9E37_79B9_7F4A_7C15);
+    x ^= x >> 30;
+    x = x.wrapping_mul(0xBF58_476D_1CE4_E5B9);
+    x ^= x >> 27;
+    x = x.wrapping_mul(0x94D0_49BB_1331_11EB);
+    x ^= x >> 31;
+    (x >> 40) as f32 / (1u64 << 23) as f32 - 1.0
+}
+
 pub fn assemble(plan: &Plan, script: &Script, clips: &[Clip]) -> Timeline {
     let fps = plan.stage.fps as u64;
     let mut samples: Vec<i16> = Vec::new();
@@ -108,7 +120,7 @@ pub fn assemble(plan: &Plan, script: &Script, clips: &[Clip]) -> Timeline {
                     }
                 }
             }
-            silence(&mut buf, scene.pace.after);
+            silence(&mut buf, (scene.pace.after + sway(i) * scene.pace.vary).max(0.05));
         }
         // Round the scene up to whole frames, measured from the very start so nothing adds up.
         let n = ((buf.len() as u64 * fps).div_ceil(SR as u64)).max(1);

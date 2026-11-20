@@ -20,6 +20,9 @@ pvc - make a follow-along prayer video
   pvc make  [setup] [changes]    make it
   pvc frame [setup] --scene 12 --to still.png [changes]
                                  draw one moment of the video as a picture
+  pvc rerecord [setup] --scene d1b3 [changes]
+                                 throw away the kept recording on one bead, so
+                                 the next video records it afresh
   pvc save <name> [setup] [changes]
                                  keep a setup under a name, to use again
   pvc delete <name>              remove a saved setup
@@ -38,6 +41,9 @@ Changes, any number of each:
   --rule \"mystery=3: voice.name=Bella\"   change it for part of the video
   --mysteries joyful                     short for --set prayers.mysteries=joyful
   --voice NAME                           short for --set voice.name=NAME
+  --voice \"Bella + George\"               several voices take turns
+  --takes 5                              short for --set voice.takes=5: five different
+                                         recordings of each prayer take turns
   --no-voice                             short for --set voice.on=false
   --screen tv-1080p                      short for --set screen.preset=tv-1080p
   --to FOLDER                            where the files go
@@ -79,6 +85,7 @@ fn parse_args(raw: Vec<String>) -> Result<Args> {
             "--mysteries" => a.sets.push(("prayers.mysteries".into(), need(&mut it, "--mysteries")?)),
             "--voice" => a.sets.push(("voice.name".into(), json!(need(&mut it, "--voice")?).to_string())),
             "--no-voice" => a.sets.push(("voice.on".into(), "false".into())),
+            "--takes" => a.sets.push(("voice.takes".into(), need(&mut it, "--takes")?)),
             "--screen" => a.sets.push(("screen.preset".into(), need(&mut it, "--screen")?)),
             "--to" | "--out" => a.to = Some(need(&mut it, "--to")?),
             "--scene" => a.scene = Some(need(&mut it, "--scene")?),
@@ -143,6 +150,25 @@ fn choose(paths: &Paths, a: &Args, reference: Option<&str>) -> Result<Chosen> {
         None => chrono::Local::now().date_naive(),
     };
     Ok(Chosen { doc, setup, ctx: Context { today, search: paths.search(found.dir.as_deref()) } })
+}
+
+/// A scene can be named by its number (0 is the opening title) or by a bead, like d3b10.
+fn find_scene(plan: &pvc_engine::plan::Plan, wanted: &str) -> Result<usize> {
+    match wanted.parse::<usize>() {
+        Ok(n) => Ok(n.min(plan.scenes.len() - 1)),
+        Err(_) => plan
+            .scenes
+            .iter()
+            .position(|s| s.bead.as_deref() == Some(wanted) || s.id == wanted)
+            .ok_or_else(|| Error::other(format!("--scene takes a number from 0 to {} or a bead like d3b10. Got: {wanted}", plan.scenes.len() - 1))),
+    }
+}
+
+/// "the Hail Mary by Imperial - Male (take 2 of 3)"
+fn heard_line(h: &speech::Heard, title: &str) -> String {
+    let what = if h.part == speech::PartKind::Announce { "the mystery's name".to_string() } else { title.to_string() };
+    let take = if h.takes > 1 { format!(" (take {} of {})", h.take, h.takes) } else { String::new() };
+    format!("{what} by {}{take}", h.voice)
 }
 
 fn clock(seconds: f32) -> String {
@@ -232,8 +258,16 @@ fn run(a: Args) -> Result<i32> {
             println!("  Prayers:   {}", p.prayer_count);
             println!("  Length:    about {} (a guess until the voice is recorded)", clock(p.seconds));
             println!("  Screen:    {w} x {h}");
-            let voices: std::collections::BTreeSet<String> = p.scenes.iter().filter(|s| s.kind == SceneKind::Prayer && s.voice.on).map(|s| s.voice.name.clone()).collect();
+            let spoken = || p.scenes.iter().filter(|s| s.kind == SceneKind::Prayer && s.voice.on);
+            let voices: std::collections::BTreeSet<String> = spoken().map(|s| s.speaker.clone().unwrap_or_else(|| s.voice.name.clone())).collect();
             println!("  Voice:     {}", if voices.is_empty() { "none".to_string() } else { voices.into_iter().collect::<Vec<_>>().join(", ") });
+            // Say so when prayers are recorded more than once, because that is what costs more.
+            let most_takes = look.speech.iter().flatten().map(|h| h.takes).max().unwrap_or(1);
+            if spoken().any(|s| s.voice.fresh_each_time) {
+                println!("  Variety:   a new recording every time a prayer is said");
+            } else if most_takes > 1 {
+                println!("  Variety:   up to {most_takes} different recordings of a prayer take turns");
+            }
             let pictures = p.scenes.iter().filter_map(|s| s.picture.as_ref().map(|x| x.file.clone())).collect::<std::collections::BTreeSet<_>>().len();
             println!("  Pictures:  {pictures}");
             for line in cost_lines(&look.estimate, look.key) {
@@ -310,16 +344,7 @@ fn run(a: Args) -> Result<i32> {
         "frame" | "still" => {
             let c = choose(&paths, &a, first)?;
             let plan = pvc_engine::plan::build(&c.setup, &c.ctx)?;
-            // A scene can be a number (0 is the opening title) or a bead, like d3b10.
-            let wanted = a.scene.clone().unwrap_or_else(|| "1".into());
-            let scene = match wanted.parse::<usize>() {
-                Ok(n) => n.min(plan.scenes.len() - 1),
-                Err(_) => plan
-                    .scenes
-                    .iter()
-                    .position(|s| s.bead.as_deref() == Some(wanted.as_str()) || s.id == wanted)
-                    .ok_or_else(|| Error::other(format!("--scene takes a number from 0 to {} or a bead like d3b10. Got: {wanted}", plan.scenes.len() - 1)))?,
-            };
+            let scene = find_scene(&plan, a.scene.as_deref().unwrap_or("1"))?;
             let target = PathBuf::from(a.to.clone().unwrap_or_else(|| "still.png".into()));
             let work = paths.work().join(format!("frame-{}", std::process::id()));
             let browser = tools::find_browser(&paths.settings())?;
@@ -347,6 +372,27 @@ fn run(a: Args) -> Result<i32> {
             }
             for w in &plan.warnings {
                 println!("Note: {w}");
+            }
+        }
+
+        "rerecord" | "record-again" => {
+            let c = choose(&paths, &a, first)?;
+            let wanted = a.scene.as_deref().ok_or_else(|| Error::other("Say which bead: pvc rerecord luminous --scene d1b3"))?;
+            let look = make::look(&paths, &c.setup, &c.ctx)?;
+            let scene = find_scene(&look.plan, wanted)?;
+            let title = look.plan.scenes[scene].title.clone();
+            let kept: Vec<&speech::Heard> = look.speech[scene].iter().filter(|h| !h.own_recording && h.kept).collect();
+            let gone = make::record_again(&paths, &c.setup, &c.ctx, scene)?;
+            if a.json {
+                return print_json(&json!({ "scene": scene, "title": title, "pieces": gone.pieces, "credits": gone.letters })).map(|_| 0);
+            }
+            if gone.pieces == 0 {
+                println!("Nothing to throw away: no kept recording is heard on scene {scene} ({title}).");
+            } else {
+                for h in &kept {
+                    println!("Threw away {}. It was heard {} time{} in this video.", heard_line(h, &title), h.uses, if h.uses == 1 { "" } else { "s" });
+                }
+                println!("Nothing has been spent. The next video that uses it will record it again: about {} credits.", commas(gone.letters));
             }
         }
 

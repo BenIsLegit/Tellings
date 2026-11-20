@@ -3,6 +3,9 @@
 //! Each prayer is recorded once per voice and kept, so the Hail Mary that plays
 //! 53 times is paid for once, and making the same video again costs nothing.
 //!
+//! A setup can ask for more than one recording of a prayer ("takes"), so the
+//! repeats do not all sound alike. Each take is recorded once and kept too.
+//!
 //! The work happens in four steps, and only the third one spends credits:
 //!
 //! 1. `script`   — list every piece of speech the plan needs, without repeats
@@ -14,11 +17,13 @@ use crate::elevenlabs::{Alignment, Client, SpeechRequest, VoiceInfo};
 use crate::error::{Error, Result};
 use crate::paths::Paths;
 use crate::plan::{find_file, Plan, SceneKind, FIRST_VIDEO_PACE};
+use crate::setup::Voice;
 use crate::tools;
+use crate::variety::Turns;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use sha2::{Digest, Sha256};
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
 
 /// Samples per second for all sound inside the tool.
@@ -74,9 +79,13 @@ pub struct ClipSpec {
     pub speed: Speed,
     /// The lines this piece covers, for timing each one.
     pub lines: Vec<String>,
+    /// Which recording of these words by this voice, counting from 1. Always 1
+    /// unless the setup asks for more than one take.
+    pub take: u32,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Serialize, Clone, Copy, Debug, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
 pub enum PartKind {
     /// Naming the mystery.
     Announce,
@@ -104,6 +113,8 @@ pub struct Script {
 struct Builder<'a> {
     out: Script,
     index: HashMap<String, usize>,
+    /// For each piece of speech, which take comes next.
+    takes: HashMap<String, Turns>,
     search: &'a [PathBuf],
 }
 
@@ -111,7 +122,7 @@ impl Builder<'_> {
     /// Add a piece, or find the one already there that sounds the same.
     fn add(&mut self, spec: ClipSpec) -> usize {
         let key = match &spec.source {
-            Source::Speech { voice, text } => format!("S|{}|{}|{:?}|{:?}|{:?}|{:?}|{text}", voice.tag(), voice.model, voice.stability, voice.similarity, voice.style, spec.speed),
+            Source::Speech { voice, text } => format!("S|{}|{:?}|{}|{text}", sound_of(voice), spec.speed, spec.take),
             Source::Recording { file } => format!("R|{}|{:?}", file.display(), spec.speed),
         };
         if let Some(i) = self.index.get(&key) {
@@ -122,13 +133,21 @@ impl Builder<'_> {
         self.out.clips.len() - 1
     }
 
-    fn speech(&mut self, voice: VoiceRef, lines: &[String], speed: Speed) -> usize {
-        self.add(ClipSpec { source: Source::Speech { voice, text: lines.join(" ") }, speed, lines: lines.to_vec() })
+    /// `how` is the scene's voice settings: how many takes, and in what order.
+    /// `silent` is true where the voice has dropped out and the piece only keeps time.
+    fn speech(&mut self, voice: VoiceRef, lines: &[String], speed: Speed, how: &Voice, silent: bool) -> usize {
+        let text = lines.join(" ");
+        let ways = if how.fresh_each_time { "fresh".to_string() } else { format!("{}{}", how.takes.max(1), if how.shuffle { " mixed" } else { "" }) };
+        let key = format!("{ways}|{}|{text}", sound_of(&voice));
+        let turns = self.takes.entry(key.clone()).or_insert_with(|| if how.fresh_each_time { Turns::endless() } else { Turns::new(how.takes, how.shuffle, &key) });
+        // A silent piece reuses a take that is already needed. Nobody should pay for a recording nobody hears.
+        let take = 1 + if silent { turns.again() } else { turns.next() };
+        self.add(ClipSpec { source: Source::Speech { voice, text }, speed, lines: lines.to_vec(), take })
     }
 
     fn recording(&mut self, name: &str, lines: &[String], speed: f32) -> Option<usize> {
         match find_file(name, self.search, &SOUND_ENDINGS) {
-            Some(file) => Some(self.add(ClipSpec { source: Source::Recording { file }, speed: Speed::Exact(speed), lines: lines.to_vec() })),
+            Some(file) => Some(self.add(ClipSpec { source: Source::Recording { file }, speed: Speed::Exact(speed), lines: lines.to_vec(), take: 1 })),
             None => {
                 if !self.out.missing.iter().any(|m| m == name) {
                     self.out.missing.push(name.to_string());
@@ -139,20 +158,33 @@ impl Builder<'_> {
     }
 }
 
+/// Everything about a voice that changes how its recordings sound.
+fn sound_of(voice: &VoiceRef) -> String {
+    format!("{}|{}|{:?}|{:?}|{:?}", voice.tag(), voice.model, voice.stability, voice.similarity, voice.style)
+}
+
 pub fn script(plan: &Plan, search: &[PathBuf]) -> Script {
-    let mut b = Builder { out: Script::default(), index: HashMap::new(), search };
+    let mut b = Builder { out: Script::default(), index: HashMap::new(), takes: HashMap::new(), search };
     let named = |s: &Option<String>| s.as_deref().map(str::trim).filter(|r| !r.is_empty()).map(String::from);
     for scene in &plan.scenes {
         let mut parts: Vec<Part> = Vec::new();
         let v = &scene.voice;
         if scene.kind == SceneKind::Prayer && v.on {
-            let lead = VoiceRef { name: v.name.clone(), id: v.id.clone(), model: v.model.clone(), stability: v.stability, similarity: v.similarity, style: v.style };
+            // With several voices taking turns, the plan has already picked who leads here.
+            let lead = VoiceRef {
+                name: scene.speaker.clone().unwrap_or_else(|| v.name.clone()),
+                id: if scene.speaker.is_some() { None } else { v.id.clone() },
+                model: v.model.clone(),
+                stability: v.stability,
+                similarity: v.similarity,
+                style: v.style,
+            };
             let speed = v.exact_speedup.map(Speed::Exact).unwrap_or(Speed::Pace(v.speed));
             if let Some(text) = &scene.say_first {
                 let lines = [text.clone()];
                 let clip = match named(&v.announce_recording) {
                     Some(name) => b.recording(&name, &lines, v.recording_speed),
-                    None => Some(b.speech(lead.clone(), &lines, speed)),
+                    None => Some(b.speech(lead.clone(), &lines, speed, v, false)),
                 };
                 if let Some(clip) = clip {
                     parts.push(Part { clip, kind: PartKind::Announce, first_line: 0 });
@@ -165,12 +197,12 @@ pub fn script(plan: &Plan, search: &[PathBuf]) -> Script {
                         parts.push(Part { clip, kind: PartKind::Prayer, first_line: 0 });
                     }
                 } else if let (Some(second), Some(k)) = (named(&v.respond), split) {
-                    let clip = b.speech(lead.clone(), &scene.lines[..k], speed);
+                    let clip = b.speech(lead.clone(), &scene.lines[..k], speed, v, scene.muted);
                     parts.push(Part { clip, kind: PartKind::Prayer, first_line: 0 });
-                    let clip = b.speech(VoiceRef { name: second, id: None, ..lead.clone() }, &scene.lines[k..], speed);
+                    let clip = b.speech(VoiceRef { name: second, id: None, ..lead.clone() }, &scene.lines[k..], speed, v, scene.muted);
                     parts.push(Part { clip, kind: PartKind::Prayer, first_line: k });
                 } else {
-                    let clip = b.speech(lead.clone(), &scene.lines, speed);
+                    let clip = b.speech(lead.clone(), &scene.lines, speed, v, scene.muted);
                     parts.push(Part { clip, kind: PartKind::Prayer, first_line: 0 });
                 }
             }
@@ -193,7 +225,9 @@ impl ClipSpec {
     /// The name this piece is filed under before any speed change.
     fn raw_key(&self) -> String {
         match &self.source {
-            Source::Speech { voice, text } => hash(&json!(["speech", 2, voice.tag(), voice.model, voice.stability, voice.similarity, voice.style, text])),
+            // The first take is filed as it always was, so speech recorded before takes existed is still found.
+            Source::Speech { voice, text } if self.take <= 1 => hash(&json!(["speech", 2, voice.tag(), voice.model, voice.stability, voice.similarity, voice.style, text])),
+            Source::Speech { voice, text } => hash(&json!(["speech", 2, voice.tag(), voice.model, voice.stability, voice.similarity, voice.style, text, "take", self.take])),
             Source::Recording { file } => {
                 let meta = std::fs::metadata(file).ok();
                 let len = meta.as_ref().map(|m| m.len()).unwrap_or(0);
@@ -255,6 +289,103 @@ pub fn estimate(paths: &Paths, script: &Script) -> Estimate {
     }
     est.by_voice = by_voice.into_values().collect();
     est
+}
+
+/// One piece of speech as it is heard on one scene.
+#[derive(Serialize, Clone, Debug, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct Heard {
+    pub part: PartKind,
+    /// The voice, or the name of the person's own sound file.
+    pub voice: String,
+    /// True for a sound file the person supplied. There are no takes of those.
+    pub own_recording: bool,
+    /// Which recording of these words by this voice, counting from 1.
+    pub take: u32,
+    pub letters: u64,
+    /// Already recorded and kept.
+    pub kept: bool,
+    /// How many times this same recording is heard in the whole video.
+    pub uses: usize,
+    /// How many different recordings of these words by this voice the video uses.
+    pub takes: u32,
+}
+
+/// For each scene of the plan, the pieces of speech heard on it.
+pub fn heard(paths: &Paths, script: &Script) -> Vec<Vec<Heard>> {
+    let mut uses = vec![0usize; script.clips.len()];
+    for part in script.scenes.iter().flatten() {
+        uses[part.clip] += 1;
+    }
+    let mut takes: HashMap<String, BTreeSet<u32>> = HashMap::new();
+    let same_words = |c: &ClipSpec| match &c.source {
+        Source::Speech { voice, text } => format!("{}|{text}", sound_of(voice)),
+        Source::Recording { file } => file.display().to_string(),
+    };
+    for clip in &script.clips {
+        takes.entry(same_words(clip)).or_default().insert(clip.take);
+    }
+    script
+        .scenes
+        .iter()
+        .map(|parts| {
+            parts
+                .iter()
+                .map(|part| {
+                    let clip = &script.clips[part.clip];
+                    let (voice, own_recording, letters, kept) = match &clip.source {
+                        Source::Speech { voice, text } => (voice.label(), false, letters(text), paths.speech().join(format!("{}.mp3", clip.raw_key())).is_file()),
+                        Source::Recording { file } => (file.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default(), true, 0, true),
+                    };
+                    Heard { part: part.kind, voice, own_recording, take: clip.take, letters, kept, uses: uses[part.clip], takes: takes[&same_words(clip)].len() as u32 }
+                })
+                .collect()
+        })
+        .collect()
+}
+
+#[derive(Serialize, Clone, Debug, Default, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct Forgotten {
+    /// How many kept recordings were thrown away.
+    pub pieces: usize,
+    /// Their letters: what it costs to record them again.
+    pub letters: u64,
+}
+
+/// Throw away the kept recordings heard on one scene, so the next video records
+/// them afresh. For a recording that came out wrong. Spends nothing itself; the
+/// next `record` does, and it asks first like any other.
+pub fn forget(paths: &Paths, script: &Script, scene: usize) -> Result<Forgotten> {
+    let mut out = Forgotten::default();
+    let mut done: BTreeSet<usize> = BTreeSet::new();
+    for part in script.scenes.get(scene).map(Vec::as_slice).unwrap_or(&[]) {
+        let clip = &script.clips[part.clip];
+        let Source::Speech { voice, text } = &clip.source else { continue };
+        if !done.insert(part.clip) {
+            continue;
+        }
+        let key = clip.raw_key();
+        let sound = paths.speech().join(format!("{key}.mp3"));
+        if !sound.is_file() {
+            continue;
+        }
+        // The sound goes first: its absence is what marks the piece as not recorded.
+        std::fs::remove_file(&sound)?;
+        let _ = std::fs::remove_file(paths.speech().join(format!("{key}.json")));
+        // And everything worked out from it: the trimmed copy and each paced copy.
+        if let Ok(dir) = std::fs::read_dir(paths.clips()) {
+            for item in dir.flatten() {
+                if item.file_name().to_string_lossy().starts_with(&key) {
+                    let _ = std::fs::remove_file(item.path());
+                }
+            }
+        }
+        out.pieces += 1;
+        out.letters += letters(text);
+        log::warn!("a kept recording by voice \"{}\" (take {}) was thrown away at the person's request", voice.label(), clip.take);
+    }
+    Ok(out)
 }
 
 // ───────────────────────── 3. record what is missing ─────────────────────────
@@ -601,6 +732,122 @@ mod tests {
         let other = est.by_voice.iter().find(|v| v.voice == "Other").unwrap();
         assert_eq!(other.pieces, 6);
         assert_eq!(est.by_voice.len(), 2);
+    }
+
+    #[test]
+    fn several_takes_of_a_prayer_go_round() {
+        let p = plan(json!({ "prayers": { "mysteries": "luminous" }, "voice": { "takes": 3 } }));
+        let s = script(&p, &[]);
+        let takes_of = |first_line: &str| -> Vec<u32> {
+            s.scenes.iter().flatten().filter(|part| s.clips[part.clip].lines.first().map(String::as_str) == Some(first_line)).map(|part| s.clips[part.clip].take).collect()
+        };
+        // 53 Hail Marys, three recordings, in turn.
+        let hail = takes_of("Hail Mary, full of grace,");
+        assert_eq!(hail.len(), 53);
+        assert_eq!(hail[..7], [1, 2, 3, 1, 2, 3, 1]);
+        // A prayer said twice only needs two recordings. One said once needs one.
+        assert_eq!(takes_of("In the name of the Father,"), [1, 2]);
+        assert_eq!(takes_of("I believe in God, the Father almighty,"), [1]);
+        // 8 prayers and 5 mysteries named: 13 pieces with one take. With three takes:
+        // Hail Mary 3, Our Father 3, Glory Be 3, O My Jesus 3, Sign of the Cross 2, and 8 said once.
+        assert_eq!(s.clips.len(), 3 + 3 + 3 + 3 + 2 + 8);
+        let one = estimate(&temp("takes-1"), &script(&plan(json!({ "prayers": { "mysteries": "luminous" } })), &[]));
+        let three = estimate(&temp("takes-3"), &s);
+        assert!(three.letters_to_record > one.letters_to_record && three.letters_to_record < one.letters_to_record * 3);
+
+        // What is heard on a bead says which take it is and how many there are.
+        let h = heard(&temp("takes-h"), &s);
+        let bead = p.scenes.iter().position(|sc| sc.bead.as_deref() == Some("d1b2")).unwrap();
+        assert_eq!((h[bead][0].take, h[bead][0].takes, h[bead][0].kept), (2, 3, false));
+        assert_eq!(h[bead][0].uses, 18, "53 Hail Marys over three takes: 18, 18 and 17");
+    }
+
+    #[test]
+    fn one_take_is_filed_where_it_always_was() {
+        let voice = VoiceRef { name: "Imperial - Male".into(), id: None, model: "m".into(), stability: None, similarity: None, style: None };
+        let clip = |take| ClipSpec { source: Source::Speech { voice: voice.clone(), text: "Amen.".into() }, speed: Speed::Pace(1.0), lines: vec!["Amen.".into()], take };
+        assert_eq!(clip(1).raw_key(), hash(&json!(["speech", 2, "name:imperial - male", "m", null, null, null, "Amen."])));
+        assert_ne!(clip(1).raw_key(), clip(2).raw_key());
+        assert_ne!(clip(2).raw_key(), clip(3).raw_key());
+    }
+
+    #[test]
+    fn mixed_up_takes_use_every_take_and_never_repeat_back_to_back() {
+        let p = plan(json!({ "voice": { "takes": 4, "shuffle": true } }));
+        let s = script(&p, &[]);
+        let hail: Vec<u32> = s.scenes.iter().flatten().filter(|part| s.clips[part.clip].lines.first().map(String::as_str) == Some("Hail Mary, full of grace,")).map(|part| s.clips[part.clip].take).collect();
+        assert_eq!(hail[..4], [1, 2, 3, 4]);
+        assert!(hail.windows(2).all(|w| w[0] != w[1]), "{hail:?}");
+        assert!(hail.chunks(4).skip(1).any(|c| c != [1, 2, 3, 4]), "{hail:?}");
+        // The same setup always gives the same mix.
+        let again: Vec<u32> = script(&p, &[]).scenes.iter().flatten().filter(|part| s.clips[part.clip].lines.first().map(String::as_str) == Some("Hail Mary, full of grace,")).map(|part| s.clips[part.clip].take).collect();
+        assert_eq!(hail, again);
+    }
+
+    #[test]
+    fn a_fresh_recording_every_time() {
+        let p = plan(json!({ "voice": { "freshEachTime": true } }));
+        let s = script(&p, &[]);
+        // 75 prayers and 5 mysteries named, and no recording is heard twice.
+        assert_eq!(s.clips.len(), 80);
+        let mut uses = vec![0; s.clips.len()];
+        s.scenes.iter().flatten().for_each(|part| uses[part.clip] += 1);
+        assert!(uses.iter().all(|n| *n == 1));
+
+        // Only the Hail Marys of one decade: the rest stay one recording each.
+        let p = plan(json!({ "rules": [{ "for": { "mystery": 2, "prayer": "hailmary" }, "set": { "voice": { "freshEachTime": true } } }] }));
+        assert_eq!(script(&p, &[]).clips.len(), 13 + 9);
+    }
+
+    #[test]
+    fn silence_is_never_paid_for() {
+        // The voice says three Hail Marys of each decade and then drops out. The
+        // silent beads still need the prayer's length, and borrow a take for it.
+        let p = plan(json!({ "voice": { "freshEachTime": true, "dropAfter": 3 } }));
+        let s = script(&p, &[]);
+        let hail = s.clips.iter().filter(|c| c.lines.first().map(String::as_str) == Some("Hail Mary, full of grace,")).count();
+        assert_eq!(hail, 3 + 5 * 3);
+    }
+
+    #[test]
+    fn voices_taking_turns_each_keep_their_own_recordings() {
+        let p = plan(json!({ "prayers": { "mysteries": "luminous" }, "rules": [{ "for": { "prayer": "hailmary" }, "set": { "voice": { "name": "Ann + Ben" } } }] }));
+        let s = script(&p, &[]);
+        // One more piece than a single voice needs: the second voice's Hail Mary.
+        assert_eq!(s.clips.len(), 14);
+        let est = estimate(&temp("turns"), &s);
+        let names: Vec<&str> = est.by_voice.iter().map(|v| v.voice.as_str()).collect();
+        assert_eq!(names, ["Ann", "Ben", "Imperial - Male"]);
+        assert_eq!(est.by_voice[0].pieces, 1);
+        assert_eq!(est.by_voice[0].letters, est.by_voice[1].letters);
+    }
+
+    #[test]
+    fn a_recording_can_be_thrown_away_and_made_again() {
+        let paths = temp("forget");
+        let p = plan(json!({ "prayers": { "mysteries": "luminous" }, "voice": { "takes": 2 } }));
+        let s = script(&p, &[]);
+        let mut server = mockito::Server::new();
+        server.mock("GET", "/v2/voices").match_query(mockito::Matcher::Any).with_body(r#"{"voices":[{"voice_id":"imp","name":"Imperial - Male"}],"has_more":false}"#).create();
+        server.mock("POST", "/v1/text-to-speech/imp/with-timestamps").match_query(mockito::Matcher::Any).with_body(r#"{"audio_base64":"AAEC"}"#).create();
+        let client = Client::with_base("k", &server.url()).unwrap();
+        record(&paths, &client, &s, |_, _| true).unwrap();
+        assert_eq!(estimate(&paths, &s).pieces_to_record, 0);
+
+        // The second Hail Mary of decade one is take 2. Throw that one away.
+        let bead = p.scenes.iter().position(|sc| sc.bead.as_deref() == Some("d1b2")).unwrap();
+        let gone = forget(&paths, &s, bead).unwrap();
+        assert_eq!(gone.pieces, 1);
+        let est = estimate(&paths, &s);
+        assert_eq!((est.pieces_to_record, est.letters_to_record), (1, gone.letters));
+        // Take 1 is untouched, and throwing the same one away twice does nothing.
+        let h = heard(&paths, &s);
+        let first = p.scenes.iter().position(|sc| sc.bead.as_deref() == Some("d1b1")).unwrap();
+        assert!(h[first][0].kept && !h[bead][0].kept);
+        assert_eq!(forget(&paths, &s, bead).unwrap(), Forgotten::default());
+        // Recording again fills the hole and nothing else.
+        assert_eq!(record(&paths, &client, &s, |_, _| true).unwrap(), gone.letters);
+        let _ = std::fs::remove_dir_all(&paths.data);
     }
 
     #[test]

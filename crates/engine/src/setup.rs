@@ -238,12 +238,28 @@ impl Default for Prayers {
 
 // ───────────────────────── voice (narrows) ─────────────────────────
 
+/// When several voices take turns: how often the next one takes over.
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Default)]
+#[serde(rename_all = "kebab-case")]
+pub enum TurnEvery {
+    /// A different voice on every prayer.
+    #[default]
+    Prayer,
+    /// One voice leads a whole decade, then the next takes over. The opening
+    /// prayers and the closing prayers count as one turn each.
+    Decade,
+}
+
+/// What joins several voice names into one setting: "Bella + George".
+pub const VOICE_JOIN: &str = " + ";
+
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 #[serde(default, rename_all = "camelCase", deny_unknown_fields)]
 pub struct Voice {
     /// false = no voice. Words on screen only.
     pub on: bool,
-    /// The name of a voice in your ElevenLabs account.
+    /// The name of a voice in your ElevenLabs account. Several names joined
+    /// with " + " take turns: "Bella + George".
     pub name: String,
     /// An exact ElevenLabs voice id. Wins over the name when both are given.
     pub id: Option<String>,
@@ -269,6 +285,28 @@ pub struct Voice {
     pub drop_after: u32,
     /// Say the name of each mystery aloud.
     pub announce: bool,
+    /// With several voices in `name`: how often the next one takes over.
+    pub turn_every: TurnEvery,
+    /// How many different recordings of each prayer take turns. 1 = one
+    /// recording, used every time, as in the first video.
+    pub takes: u32,
+    /// Record each prayer afresh every time it is said, so no two sound the
+    /// same. Wins over `takes`. Costs the most credits.
+    pub fresh_each_time: bool,
+    /// Mix up the order of the takes and of the voices, instead of going in turn.
+    pub shuffle: bool,
+}
+
+impl Voice {
+    /// The voices that lead, in the order given. More than one means they take turns.
+    pub fn names(&self) -> Vec<String> {
+        self.name.split(VOICE_JOIN).map(str::trim).filter(|n| !n.is_empty()).map(String::from).collect()
+    }
+
+    /// True when one exact voice id has been given. It leads alone, whatever `name` says.
+    pub fn has_id(&self) -> bool {
+        self.id.as_deref().is_some_and(|i| !i.trim().is_empty())
+    }
 }
 
 impl Default for Voice {
@@ -289,6 +327,10 @@ impl Default for Voice {
             respond: None,
             drop_after: 0,
             announce: true,
+            turn_every: TurnEvery::default(),
+            takes: 1,
+            fresh_each_time: false,
+            shuffle: false,
         }
     }
 }
@@ -319,6 +361,9 @@ pub struct Pace {
     /// With no voice: the shortest any bead stays up.
     pub min_seconds: f32,
     pub transition: Transition,
+    /// Lets the quiet after each prayer differ a little from bead to bead, by up
+    /// to this many seconds either way. 0 keeps every pause the same.
+    pub vary: f32,
     /// Length of the soft fade between beads, in seconds.
     pub fade: f32,
     /// How long the opening title stays up. Whole video only.
@@ -337,6 +382,7 @@ impl Default for Pace {
             seconds_per_line: 2.0,
             min_seconds: 4.0,
             transition: Transition::default(),
+            vary: 0.0,
             fade: 0.3,
             intro: 4.0,
             outro: 4.0,
@@ -847,8 +893,17 @@ fn check_style(s: &Style, label: &str) -> Result<()> {
             }
         }
     }
-    if s.voice.on && s.voice.id.is_none() && s.voice.name.trim().is_empty() && s.voice.recording.is_none() {
+    if s.voice.on && !s.voice.has_id() && s.voice.names().is_empty() && s.voice.recording.is_none() {
         return bad("the voice is on but has no name. Set voice.name, or turn the voice off with voice.on = false.");
+    }
+    if s.voice.names().len() > 12 {
+        return bad("voice.name lists more than 12 voices to take turns. 12 is the most.");
+    }
+    if !(1..=20).contains(&s.voice.takes) {
+        return bad("voice.takes must be between 1 and 20. 1 is one recording of each prayer, used every time.");
+    }
+    if !(0.0..=5.0).contains(&s.pace.vary) {
+        return bad("pace.vary must be between 0 and 5 seconds.");
     }
     for (name, v) in [
         ("before", s.pace.before),
@@ -977,6 +1032,19 @@ mod tests {
         let mut want = Setup::default();
         want.voice.name = "Bella".into();
         assert_eq!(s, want);
+    }
+
+    #[test]
+    fn several_voices_in_one_name_take_turns() {
+        let s = from_doc(&json!({ "voice": { "name": "Imperial - Male + Bella +  Roger - Laid-Back, Casual" } })).unwrap();
+        assert_eq!(s.voice.names(), ["Imperial - Male", "Bella", "Roger - Laid-Back, Casual"], "a comma or a dash in a name is part of the name");
+        assert_eq!(Setup::default().voice.names(), ["Imperial - Male"]);
+        // The first video's way is still the default: one voice, one recording of each prayer.
+        let v = Setup::default().voice;
+        assert!(v.takes == 1 && !v.fresh_each_time && !v.shuffle);
+        assert_eq!(Setup::default().pace.vary, 0.0);
+        let err = from_doc(&json!({ "voice": { "takes": 0 } })).unwrap_err().to_string();
+        assert!(err.contains("voice.takes"), "{err}");
     }
 
     #[test]

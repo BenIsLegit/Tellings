@@ -8,9 +8,10 @@ use crate::beads::{self, Drawing};
 use crate::error::Result;
 use crate::prayers::{self, ORDINAL, ROMAN, VIRTUES};
 use crate::setup::*;
+use crate::variety::Turns;
 use serde::Serialize;
 use serde_json::Value;
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
 
 /// The pace of the first video, in letters per second of speech. Worked out from
@@ -101,6 +102,8 @@ pub struct Scene {
 
     // What is heard.
     pub voice: Voice,
+    /// When several voices take turns, the one that leads here.
+    pub speaker: Option<String>,
     pub pace: Pace,
     /// The mystery, named aloud before the prayer.
     pub say_first: Option<String>,
@@ -477,6 +480,7 @@ pub fn build(setup: &Setup, ctx: &Context) -> Result<Plan> {
             color_choice: style.colors.clone(),
         words: style.words,
         voice: style.voice,
+        speaker: None,
         pace: style.pace,
         say_first: None,
         response_from: None,
@@ -487,6 +491,8 @@ pub fn build(setup: &Setup, ctx: &Context) -> Result<Plan> {
 
     let mut seen: BTreeSet<String> = BTreeSet::new();
     let mut last_section = String::new();
+    // Voices taking turns: for each list of voices, whose turn it is and which section they last led.
+    let mut leaders: HashMap<String, (Turns, String)> = HashMap::new();
     for (i, st) in steps.into_iter().enumerate() {
         let style = cascade.style(&st.section, st.mystery, Some(&st.prayer), Some(&st.bead))?;
         let info = st.mystery.map(|d| &set.items[(d - 1) as usize]);
@@ -511,6 +517,24 @@ pub fn build(setup: &Setup, ctx: &Context) -> Result<Plan> {
             _ => Center { label: set_label.clone(), number: None, name: if st.section == "opening" { "Opening prayers".into() } else { "Closing prayers".into() } },
         };
         let muted = style.voice.drop_after > 0 && st.mystery.is_some() && st.prayer == "hailmary" && st.pip.is_some_and(|p| p[0] > style.voice.drop_after);
+        let names = style.voice.names();
+        let speaker = if style.voice.on && !style.voice.has_id() && names.len() > 1 {
+            let key = format!("{}|{:?}|{}", names.join(VOICE_JOIN).to_lowercase(), style.voice.turn_every, style.voice.shuffle);
+            let (turns, led) = leaders.entry(key.clone()).or_insert_with(|| (Turns::new(names.len() as u32, style.voice.shuffle, &key), String::new()));
+            let pick = match style.voice.turn_every {
+                // Where the voice has dropped out nobody speaks, so nobody's turn is used up.
+                TurnEvery::Prayer if muted => turns.again(),
+                TurnEvery::Prayer => turns.next(),
+                TurnEvery::Decade if *led != st.section => {
+                    *led = st.section.clone();
+                    turns.next()
+                }
+                TurnEvery::Decade => turns.again(),
+            };
+            Some(names[pick as usize].clone())
+        } else {
+            None
+        };
         let chapter = if st.section != last_section {
             last_section = st.section.clone();
             Some(match (info, st.mystery) {
@@ -562,6 +586,7 @@ pub fn build(setup: &Setup, ctx: &Context) -> Result<Plan> {
             color_choice: style.colors.clone(),
             words: style.words,
             voice: style.voice,
+            speaker,
             pace: style.pace,
             say_first,
             response_from: st.response_from,
@@ -598,6 +623,7 @@ pub fn build(setup: &Setup, ctx: &Context) -> Result<Plan> {
             color_choice: style.colors.clone(),
         words: style.words,
         voice: style.voice,
+        speaker: None,
         pace: style.pace,
         say_first: None,
         response_from: None,
@@ -750,6 +776,55 @@ mod tests {
         assert_eq!(voice("cross", "sign"), "Four", "one bead beats everything");
         // The other settings are not disturbed.
         assert!(p.scenes.iter().all(|s| s.voice.speed == 1.0 && s.pace.after == 0.70));
+    }
+
+    #[test]
+    fn several_voices_take_turns() {
+        let leads = |p: &Plan, prayer: &str| -> Vec<String> { p.scenes.iter().filter(|s| s.prayer.as_deref() == Some(prayer)).map(|s| s.speaker.clone().unwrap_or_default()).collect() };
+
+        // One voice: nobody takes turns.
+        assert!(plan(json!({})).scenes.iter().all(|s| s.speaker.is_none()));
+
+        // Two voices, a new one on every prayer.
+        let p = plan(json!({ "voice": { "name": "Ann + Ben" } }));
+        let all: Vec<&str> = p.scenes.iter().filter(|s| s.kind == SceneKind::Prayer).map(|s| s.speaker.as_deref().unwrap()).collect();
+        assert_eq!(all.len(), 75);
+        assert!(all.chunks(2).all(|c| c[0] == "Ann" && c.get(1).is_none_or(|b| *b == "Ben")), "they alternate, Ann first");
+
+        // Only the Hail Marys take turns: three voices go round, whatever comes between.
+        let p = plan(json!({ "rules": [{ "for": { "prayer": "hailmary" }, "set": { "voice": { "name": "Ann + Ben + Cat" } } }] }));
+        let hm = leads(&p, "hailmary");
+        assert_eq!(hm[..7], ["Ann", "Ben", "Cat", "Ann", "Ben", "Cat", "Ann"]);
+        assert!(leads(&p, "ourfather").iter().all(String::is_empty), "the Our Father keeps the one voice");
+
+        // One voice for each decade. The opening and closing count as a turn each.
+        let p = plan(json!({ "voice": { "name": "Ann + Ben", "turnEvery": "decade" } }));
+        let by_section: Vec<(String, String)> = p.scenes.iter().filter(|s| s.kind == SceneKind::Prayer).map(|s| (s.section.clone(), s.speaker.clone().unwrap())).collect();
+        for (section, who) in &by_section {
+            let want = if matches!(section.as_str(), "opening" | "decade-2" | "decade-4" | "closing") { "Ann" } else { "Ben" };
+            assert_eq!(who, want, "{section}");
+        }
+
+        // A narrower single voice ends the turn-taking for its part.
+        let p = plan(json!({ "voice": { "name": "Ann + Ben" }, "rules": [{ "for": { "mystery": 2 }, "set": { "voice": { "name": "Cat" } } }] }));
+        assert!(p.scenes.iter().filter(|s| s.mystery == Some(2)).all(|s| s.speaker.is_none() && s.voice.name == "Cat"));
+        assert!(p.scenes.iter().filter(|s| s.mystery == Some(3)).all(|s| s.speaker.is_some()));
+
+        // An exact voice id leads alone.
+        let p = plan(json!({ "voice": { "name": "Ann + Ben", "id": "abc123" } }));
+        assert!(p.scenes.iter().all(|s| s.speaker.is_none()));
+    }
+
+    #[test]
+    fn a_voice_that_has_dropped_out_does_not_use_up_a_turn() {
+        let p = plan(json!({ "voice": { "name": "Ann + Ben + Cat", "dropAfter": 2 }, "prayers": { "opening": false, "closing": false, "firstDecade": 1, "lastDecade": 1, "fatima": false } }));
+        // Our Father (Ann), Hail Mary 1 (Ben), Hail Mary 2 (Cat), eight silent ones, Glory Be (Ann).
+        let who: Vec<(&str, bool)> = p.scenes.iter().filter(|s| s.kind == SceneKind::Prayer).map(|s| (s.speaker.as_deref().unwrap(), s.muted)).collect();
+        assert_eq!(who[0], ("Ann", false));
+        assert_eq!(who[1], ("Ben", false));
+        assert_eq!(who[2], ("Cat", false));
+        assert!(who[3..11].iter().all(|w| *w == ("Cat", true)));
+        assert_eq!(who[11], ("Ann", false));
     }
 
     #[test]

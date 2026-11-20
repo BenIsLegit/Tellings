@@ -8,7 +8,7 @@
 //!
 //! ```text
 //! library  find a setup by name          setup   fill in every default
-//! plan     list every scene, pick the narrowest rule for each
+//! plan     list every scene, pick the narrowest rule for each     (variety: whose turn it is)
 //! speech   record what is missing, bring it to pace      (elevenlabs, secrets)
 //! audio    lay the prayers end to end
 //! frames   draw a still for each scene                    (cdp, renderer/frame.js)
@@ -32,6 +32,7 @@ pub mod secrets;
 pub mod setup;
 pub mod speech;
 pub mod tools;
+pub mod variety;
 pub mod video;
 
 pub use error::{Error, Result};

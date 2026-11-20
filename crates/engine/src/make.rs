@@ -12,7 +12,7 @@ use crate::paths::{file_safe, Paths};
 use crate::plan::{self, Context, Plan};
 use crate::secrets::{self, KeySource};
 use crate::setup::{Mysteries, Setup};
-use crate::speech::{self, Estimate, PaceNote};
+use crate::speech::{self, Estimate, Forgotten, Heard, PaceNote};
 use crate::tools;
 use crate::video;
 use serde::Serialize;
@@ -26,6 +26,9 @@ use std::time::Instant;
 pub struct Look {
     pub plan: Plan,
     pub estimate: Estimate,
+    /// For each scene of the plan, the speech heard on it: which voice, which
+    /// take, and whether it is already recorded.
+    pub speech: Vec<Vec<Heard>>,
     /// Where the ElevenLabs key was found, if there is one.
     pub key: Option<KeySource>,
     /// The files `make` would write.
@@ -74,9 +77,25 @@ fn needs_sound(setup: &Setup) -> bool {
 /// Plan the video and work out what it would cost. Spends nothing.
 pub fn look(paths: &Paths, setup: &Setup, ctx: &Context) -> Result<Look> {
     let plan = plan::build(setup, ctx)?;
-    let estimate = if needs_sound(setup) { speech::estimate(paths, &speech::script(&plan, &ctx.search)) } else { Estimate::default() };
+    let (estimate, speech) = if needs_sound(setup) {
+        let script = speech::script(&plan, &ctx.search);
+        (speech::estimate(paths, &script), speech::heard(paths, &script))
+    } else {
+        (Estimate::default(), vec![Vec::new(); plan.scenes.len()])
+    };
     let files = out_files(paths, setup, &plan).into_iter().map(|(_, p)| p.to_string_lossy().into_owned()).collect();
-    Ok(Look { plan, estimate, key: secrets::source(), files })
+    Ok(Look { plan, estimate, speech, key: secrets::source(), files })
+}
+
+/// Throw away the kept recordings heard on one scene, so they are recorded
+/// afresh the next time the video is made. For a recording that came out wrong.
+/// Spends nothing itself.
+pub fn record_again(paths: &Paths, setup: &Setup, ctx: &Context, scene: usize) -> Result<Forgotten> {
+    let plan = plan::build(setup, ctx)?;
+    if scene >= plan.scenes.len() {
+        return Err(Error::setup(format!("There is no scene {scene}. This video has scenes 0 to {}.", plan.scenes.len() - 1)));
+    }
+    speech::forget(paths, &speech::script(&plan, &ctx.search), scene)
 }
 
 /// Credits left in the ElevenLabs account. Free to ask.
