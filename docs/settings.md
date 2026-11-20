@@ -163,8 +163,12 @@ Can be set for part of the video with a rule.
 
 | Setting | Choices | What it does |
 | --- | --- | --- |
-| `music.file` | a sound file | Music or chant that you supply. Leave out for silence. |
+| `music.file` | a sound file | Music or chant that you supply. Leave out for silence. A file here wins over music.prompt. |
 | `music.volume` | 0 to 1 | How loud it is under the voice. |
+| `music.prompt` | words | Music for ElevenLabs to make, like: slow, quiet organ in an empty chapel. Describe the sound. Do not name a hymn, a song or an artist: ElevenLabs refuses those. Making it spends credits, about 900 a minute, once. The piece is kept. |
+| `music.minutes` | 0.5 to 5 | How long a piece ElevenLabs makes. It loops under the whole video. Longer costs more: about 900 credits a minute, a rough figure. |
+| `music.instrumental` | true \| false | true means no singing. Only for music ElevenLabs makes. |
+| `music.take` | 1 to 99 | Which piece. A new number asks ElevenLabs for a different piece from the same words, and costs again. |
 
 ## A room for the voice
 

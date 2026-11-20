@@ -1,7 +1,8 @@
 //! Talking to ElevenLabs: list the voices, the models and the pronunciation
-//! dictionaries, check the credits, record speech.
+//! dictionaries, check the credits, record speech, make music.
 //!
-//! Only `speak` costs credits. The caller is responsible for having asked first.
+//! Only `speak`, `converse` and `compose` cost credits. The caller is
+//! responsible for having asked first.
 
 use crate::error::{Error, Result};
 use base64::Engine as _;
@@ -229,6 +230,35 @@ pub struct Spoken {
     pub request_id: Option<String>,
 }
 
+/// The ElevenLabs model that makes music. The one ElevenLabs uses when none
+/// is named is being withdrawn, so this one is always named.
+pub const MUSIC_MODEL: &str = "music_v2_5";
+
+/// How long to wait for a piece of music. It is made in one go and can take minutes.
+const MUSIC_WAIT: Duration = Duration::from_secs(900);
+
+/// One request for music, made from a description in words.
+#[derive(Clone, Debug, Default)]
+pub struct MusicRequest<'a> {
+    pub prompt: &'a str,
+    /// How long a piece, in thousandths of a second. ElevenLabs takes 3 seconds to 10 minutes.
+    pub length_ms: u64,
+    /// No singing.
+    pub instrumental: bool,
+}
+
+#[derive(Debug)]
+pub struct Composed {
+    /// A sound file, in the format asked for.
+    pub audio: Vec<u8>,
+    /// ElevenLabs' own name for the piece, when it sends one.
+    pub song_id: Option<String>,
+    /// The credits ElevenLabs says it charged. It is not known to say so for
+    /// music, but if it ever does, this is where it lands.
+    pub cost: Option<u64>,
+    pub request_id: Option<String>,
+}
+
 /// 1.1 is held as 1.10000002. Send the number the person chose.
 fn tidy(v: f32) -> Value {
     json!((v as f64 * 1000.0).round() / 1000.0)
@@ -282,6 +312,11 @@ impl Client {
             return Ok(resp);
         }
         let body: Value = resp.json().unwrap_or(Value::Null);
+        Err(Self::problem(status.as_u16(), &body))
+    }
+
+    /// What went wrong, in plain words, from an answer that was not a yes.
+    fn problem(status: u16, body: &Value) -> Error {
         let detail = &body["detail"];
         // One problem comes as { status, message }. A badly shaped request comes as a list of them.
         let said = match detail {
@@ -289,7 +324,7 @@ impl Client {
             _ => detail["message"].as_str().or_else(|| detail.as_str()).unwrap_or("").to_string(),
         };
         let code = detail["status"].as_str().or_else(|| detail["code"].as_str()).unwrap_or("");
-        Err(Error::voice(match status.as_u16() {
+        Error::voice(match status {
             _ if code == "missing_permissions" => {
                 format!("This ElevenLabs API key is not allowed to do that. {said} Make a key that is, at elevenlabs.io under API keys, and save it in Settings.")
             }
@@ -299,7 +334,7 @@ impl Client {
             404 => format!("ElevenLabs could not find that voice or model. {said}"),
             429 => "ElevenLabs is busy or you have sent too many requests. Wait a minute and try again.".to_string(),
             n => format!("ElevenLabs answered with error {n}. {said}"),
-        }))
+        })
     }
 
     /// Every voice in the account.
@@ -476,6 +511,60 @@ impl Client {
         }
         let url = format!("{}/v1/text-to-dialogue/with-timestamps", self.base);
         self.ask_for_sound(&url, req.output_format, &body)
+    }
+
+    /// Make one piece of music from a description. This spends credits, and
+    /// ElevenLabs gives no way to ask how many first: see `music.rs`.
+    ///
+    /// Like `speak`, it tries again only after a "busy" answer. It is never
+    /// sent twice otherwise: a piece may have been made and paid for.
+    pub fn compose(&self, req: &MusicRequest) -> Result<Composed> {
+        let body = json!({ "prompt": req.prompt, "music_length_ms": req.length_ms, "model_id": MUSIC_MODEL, "force_instrumental": req.instrumental });
+        let url = format!("{}/v1/music", self.base);
+        let mut waits = self.waits.iter();
+        let resp = loop {
+            // Every plan can have this format. Left to itself, ElevenLabs picks one that some plans cannot.
+            let sent = self.http.post(&url).header("xi-api-key", &self.key).query(&[("output_format", MP3)]).timeout(MUSIC_WAIT).json(&body).send();
+            let resp = match sent {
+                Ok(resp) => resp,
+                Err(e) if e.is_timeout() => {
+                    return Err(Error::voice(format!(
+                        "ElevenLabs took more than {} minutes over the music, so the tool stopped waiting. It may still have made the piece and charged for it. \
+                         Look at your credits before trying again.",
+                        MUSIC_WAIT.as_secs() / 60
+                    )))
+                }
+                Err(e) => return Err(e.into()),
+            };
+            match waits.next() {
+                Some(wait) if resp.status().as_u16() == 429 => std::thread::sleep(*wait),
+                _ => break resp,
+            }
+        };
+        let status = resp.status();
+        if !status.is_success() {
+            let body: Value = resp.json().unwrap_or(Value::Null);
+            let detail = &body["detail"];
+            // ElevenLabs will not make music from a prompt that names a song, an artist or a label. It often offers other words.
+            if detail["status"] == "bad_prompt" || detail["code"] == "bad_prompt" {
+                let offer = detail["data"]["prompt_suggestion"].as_str().map(str::trim).filter(|s| !s.is_empty());
+                return Err(Error::voice(match offer {
+                    Some(words) => format!(
+                        "ElevenLabs would not make music from those words. It refuses the name of a hymn, a song or an artist. Describe the sound instead. It suggests: \"{words}\""
+                    ),
+                    None => "ElevenLabs would not make music from those words. It refuses the name of a hymn, a song or an artist, and anything harmful. Describe the sound instead.".to_string(),
+                }));
+            }
+            return Err(Self::problem(status.as_u16(), &body));
+        }
+        let header = |name: &str| resp.headers().get(name).and_then(|v| v.to_str().ok()).map(|v| v.trim().to_string()).filter(|v| !v.is_empty());
+        let cost = header("character-cost").and_then(|v| v.parse::<f64>().ok()).filter(|c| *c >= 0.0).map(|c| c.ceil() as u64);
+        let (song_id, request_id) = (header("song-id"), header("request-id"));
+        let audio = resp.bytes()?.to_vec();
+        if audio.is_empty() {
+            return Err(Error::voice("ElevenLabs answered without any music. Look at your credits before trying again: it may have charged for the piece."));
+        }
+        Ok(Composed { audio, song_id, cost, request_id })
     }
 
     /// Send a request that records, and read the sound, the timings and the cost out of the answer.
@@ -751,6 +840,69 @@ mod tests {
         let err = client.speak(&SpeechRequest { voice_id: "refused", model: "m", text: "Amen.", ..Default::default() }).unwrap_err().to_string();
         refused.assert();
         assert!(err.contains("does not take a speed"), "{err}");
+    }
+
+    #[test]
+    fn music_is_asked_for_by_its_description() {
+        let mut server = mockito::Server::new();
+        let m = server
+            .mock("POST", "/v1/music")
+            // Named, so every plan can have it. Left out, ElevenLabs picks a finer one that some plans cannot.
+            .match_query(mockito::Matcher::UrlEncoded("output_format".into(), "mp3_44100_128".into()))
+            .match_header("xi-api-key", "test-key")
+            // The model is always named: the one ElevenLabs falls back to is being withdrawn.
+            .match_body(mockito::Matcher::Json(json!({ "prompt": "slow, quiet organ", "music_length_ms": 120000, "model_id": "music_v2_5", "force_instrumental": true })))
+            .with_header("song-id", "song-1")
+            .with_header("request-id", "req-2")
+            .with_body([0u8, 1, 2, 3])
+            .create();
+        let client = Client::with_base("test-key", &server.url()).unwrap();
+        let composed = client.compose(&MusicRequest { prompt: "slow, quiet organ", length_ms: 120_000, instrumental: true }).unwrap();
+        m.assert();
+        assert_eq!(composed.audio, [0, 1, 2, 3]);
+        assert_eq!((composed.song_id.as_deref(), composed.request_id.as_deref()), (Some("song-1"), Some("req-2")));
+        // ElevenLabs is not known to say what music cost. Nothing is made up in its place.
+        assert_eq!(composed.cost, None);
+    }
+
+    #[test]
+    fn music_is_never_asked_for_twice_unless_elevenlabs_was_busy() {
+        let mut server = mockito::Server::new();
+        let client = Client::with_base("k", &server.url()).unwrap().patient(vec![Duration::ZERO, Duration::ZERO]);
+        let ask = MusicRequest { prompt: "slow organ", length_ms: 30_000, instrumental: true };
+
+        // Busy: turned away, nothing made, nothing charged. Safe to ask again.
+        let busy = server.mock("POST", "/v1/music").match_query(mockito::Matcher::Any).with_status(429).expect(3).create();
+        let err = client.compose(&ask).unwrap_err().to_string();
+        busy.assert();
+        assert!(err.contains("busy"), "{err}");
+        busy.remove();
+
+        // Anything else is final. A piece may have been made and charged for.
+        let failed = server.mock("POST", "/v1/music").match_query(mockito::Matcher::Any).with_status(500).with_body(r#"{"detail":{"status":"server_error","message":"Something broke."}}"#).expect(1).create();
+        let err = client.compose(&ask).unwrap_err().to_string();
+        failed.assert();
+        assert!(err.contains("error 500") && err.contains("Something broke."), "{err}");
+        failed.remove();
+
+        // An answer with no sound in it is an error, and says the piece may have been charged for.
+        let empty = server.mock("POST", "/v1/music").match_query(mockito::Matcher::Any).with_body("").expect(1).create();
+        let err = client.compose(&ask).unwrap_err().to_string();
+        empty.assert();
+        assert!(err.contains("without any music") && err.contains("may have charged"), "{err}");
+        empty.remove();
+
+        // A refusal carries ElevenLabs' own suggestion when there is one.
+        let refused = server
+            .mock("POST", "/v1/music")
+            .match_query(mockito::Matcher::Any)
+            .with_status(400)
+            .with_body(r#"{"detail":{"status":"bad_prompt","message":"No.","data":{"prompt_suggestion":"A gentle hymn-like melody on organ"}}}"#)
+            .expect(1)
+            .create();
+        let err = client.compose(&ask).unwrap_err().to_string();
+        refused.assert();
+        assert!(err.contains("would not make music") && err.contains("A gentle hymn-like melody on organ"), "{err}");
     }
 
     #[test]

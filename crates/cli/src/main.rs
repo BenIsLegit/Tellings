@@ -53,7 +53,8 @@ Changes, any number of each:
   --to FOLDER                            where the files go
 
 Other:
-  --approve-credits N    agree to spend up to N ElevenLabs credits on new speech
+  --approve-credits N    agree to spend up to N ElevenLabs credits, on new speech
+                         and on music made by ElevenLabs together
   --date 2026-11-19      pretend it is this day (for \"today\")
   --json                 answer in JSON, for programs
 
@@ -223,29 +224,49 @@ fn rate_words(rate: f32) -> String {
     }
 }
 
-fn cost_lines(est: &speech::Estimate, key: Option<secrets::KeySource>) -> Vec<String> {
+/// What making the video would cost. The first line always starts "Credits:"
+/// and names the one number to agree to: the voice and the music together.
+fn cost_lines(look: &make::Look) -> Vec<String> {
+    let (est, music) = (&look.estimate, &look.music);
     let mut out = Vec::new();
-    if est.letters_to_record == 0 {
+    let voice = format!("about {} to record {} new piece{} of speech.", commas(est.credits_to_record), est.pieces_to_record, if est.pieces_to_record == 1 { "" } else { "s" });
+    // With music to pay for as well, the voice's lines sit one step in, under the number for both.
+    let both = music.credits > 0;
+    let step = if both { "    " } else { "  " };
+    if look.credits == 0 {
         if est.letters_kept > 0 {
             out.push("Credits: none. Every piece of speech is already recorded and kept.".into());
         } else {
             out.push("Credits: none. This video has no generated voice.".into());
         }
+    } else if both && est.letters_to_record > 0 {
+        out.push(format!("Credits: about {} in all, for the voice and the music together.", commas(look.credits)));
+        out.push(format!("  The voice: {voice}"));
+    } else if both {
+        out.push(format!("Credits: about {}, for the music.", commas(look.credits)));
     } else {
-        out.push(format!("Credits: about {} to record {} new piece{} of speech.", commas(est.credits_to_record), est.pieces_to_record, if est.pieces_to_record == 1 { "" } else { "s" }));
+        out.push(format!("Credits: {voice}"));
+    }
+    if est.letters_to_record > 0 {
         for v in &est.by_voice {
             let credits = if v.credits == v.letters { String::new() } else { format!(", {} credits", commas(v.credits)) };
-            out.push(format!("  {}: {} letters in {} piece{}{credits}", v.voice, commas(v.letters), v.pieces, if v.pieces == 1 { "" } else { "s" }));
+            out.push(format!("{step}{}: {} letters in {} piece{}{credits}", v.voice, commas(v.letters), v.pieces, if v.pieces == 1 { "" } else { "s" }));
         }
         if est.rates_guessed {
-            out.push("  (A guess. What this model charges is not known yet. The making stops before it goes over the number agreed to.)".into());
+            out.push(format!("{step}(A guess. What this model charges is not known yet. The making stops before it goes over the number agreed to.)"));
         }
         if est.letters_kept > 0 {
-            out.push(format!("  ({} letters are already recorded and will be reused.)", commas(est.letters_kept)));
+            out.push(format!("{step}({} letters are already recorded and will be reused.)", commas(est.letters_kept)));
         }
-        if key.is_none() {
-            out.push("  No ElevenLabs API key is saved yet. Add it in the app under Settings, or run: pvc key set".into());
-        }
+    }
+    if both {
+        out.push(format!("  The music: about {} for {} made by ElevenLabs.", commas(music.credits), make::minutes_words(music.minutes)));
+        out.push("    A rough figure. ElevenLabs does not give the price before it makes music. Afterwards the tool says what it came to.".into());
+    } else if music.wanted && music.kept {
+        out.push("  The music is already made and kept.".into());
+    }
+    if look.credits > 0 && look.key.is_none() {
+        out.push("  No ElevenLabs API key is saved yet. Add it in the app under Settings, or run: pvc key set".into());
     }
     for m in &est.missing_recordings {
         out.push(format!("Recording not found: {m}"));
@@ -319,7 +340,12 @@ fn run(a: Args) -> Result<i32> {
             }
             let pictures = p.scenes.iter().filter_map(|s| s.picture.as_ref().map(|x| x.file.clone())).collect::<std::collections::BTreeSet<_>>().len();
             println!("  Pictures:  {pictures}");
-            for line in cost_lines(&look.estimate, look.key) {
+            if look.music.wanted {
+                println!("  Music:     {} made by ElevenLabs, looped", make::minutes_words(look.music.minutes));
+            } else if let Some(file) = c.setup.music.file.as_deref().filter(|f| !f.trim().is_empty()) {
+                println!("  Music:     {file}");
+            }
+            for line in cost_lines(&look) {
                 println!("  {line}");
             }
             for w in &p.warnings {
@@ -329,8 +355,8 @@ fn run(a: Args) -> Result<i32> {
             for f in &look.files {
                 println!("    {f}");
             }
-            if look.estimate.letters_to_record > 0 {
-                println!("\nTo make it and agree to the credits: pvc make ... --approve-credits {}", look.estimate.credits_to_record);
+            if look.credits > 0 {
+                println!("\nTo make it and agree to the credits: pvc make ... --approve-credits {}", look.credits);
             }
         }
 
@@ -357,13 +383,13 @@ fn run(a: Args) -> Result<i32> {
                 Err(Error::NeedsApproval(msg)) => {
                     let look = make::look(&paths, &c.setup, &c.ctx)?;
                     if a.json {
-                        print_json(&json!({ "needsApproval": true, "message": msg, "credits": look.estimate.credits_to_record, "estimate": look.estimate }))?;
+                        print_json(&json!({ "needsApproval": true, "message": msg, "credits": look.credits, "estimate": look.estimate, "music": look.music }))?;
                     } else {
                         eprintln!("{msg}");
-                        for line in cost_lines(&look.estimate, look.key) {
+                        for line in cost_lines(&look) {
                             eprintln!("  {line}");
                         }
-                        eprintln!("\nAsk the person first. If they say yes, run the same command again with:\n  --approve-credits {}", look.estimate.credits_to_record);
+                        eprintln!("\nAsk the person first. If they say yes, run the same command again with:\n  --approve-credits {}", look.credits);
                     }
                     return Ok(2);
                 }
@@ -377,7 +403,11 @@ fn run(a: Args) -> Result<i32> {
                 println!("  {:<9} {}", f.kind, f.path);
             }
             if made.letters_recorded > 0 {
-                println!("  Recorded {} letters of new speech. Spent {} credits.", commas(made.letters_recorded), commas(made.credits_spent));
+                let on_speech = made.credits_spent - made.music.as_ref().and_then(|m| m.charged).unwrap_or(0);
+                println!("  Recorded {} letters of new speech. Spent {} credits.", commas(made.letters_recorded), commas(on_speech));
+            }
+            if let Some(said) = &made.music_said {
+                println!("  {said}");
             }
             for n in &made.pace {
                 println!("  Voice \"{}\" speaks {:.1} letters a second on its own; sped up {:.2}x to match the first video's pace.", n.voice, n.natural, n.speedup);

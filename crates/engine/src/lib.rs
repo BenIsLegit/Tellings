@@ -10,6 +10,7 @@
 //! library  find a setup by name          setup   fill in every default
 //! plan     list every scene, pick the narrowest rule for each     (variety: whose turn it is)
 //! speech   record what is missing, bring it to pace      (elevenlabs, secrets)
+//! music    have ElevenLabs make background music, once, if the setup describes some
 //! audio    lay the prayers end to end                     (room: the echo of a chapel or church)
 //! frames   draw a still for each scene                    (cdp, renderer/frame.js)
 //! video    hold each still for its sound, join, add sound
@@ -24,6 +25,7 @@ pub mod error;
 pub mod frames;
 pub mod library;
 pub mod make;
+pub mod music;
 pub mod paths;
 pub mod plan;
 pub mod prayers;

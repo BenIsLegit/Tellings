@@ -436,7 +436,8 @@ pub fn script(plan: &Plan, search: &[PathBuf]) -> Script {
     b.out
 }
 
-fn hash(parts: &serde_json::Value) -> String {
+/// A short name for a kept file, worked out from what makes it what it is.
+pub(crate) fn hash(parts: &serde_json::Value) -> String {
     let digest = Sha256::digest(parts.to_string().as_bytes());
     digest.iter().take(16).map(|b| format!("{b:02x}")).collect()
 }

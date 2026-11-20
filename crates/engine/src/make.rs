@@ -2,13 +2,17 @@
 //!
 //! `look` is free and fast: it plans the video and says what it would cost.
 //! `make` does the work. It will not spend credits unless it is told, in
-//! numbers, how many credits of new speech have been agreed to, and it stops
-//! rather than go over that number.
+//! numbers, how many credits have been agreed to, and it stops rather than go
+//! over that number.
+//!
+//! There is one number: the voice and the music together (`Look::credits`).
+//! Everything that spends is in `spend`, and nowhere else.
 
 use crate::audio::{self, Timeline};
 use crate::elevenlabs::{Client, Credits};
 use crate::error::{Error, Result};
 use crate::frames::{self, Shot};
+use crate::music::{self, MadeMusic, Piece};
 use crate::paths::{file_safe, Paths};
 use crate::plan::{self, Context, Plan};
 use crate::secrets::{self, KeySource};
@@ -26,7 +30,13 @@ use std::time::Instant;
 #[serde(rename_all = "camelCase")]
 pub struct Look {
     pub plan: Plan,
+    /// The voice: what there is to record and what that would cost.
     pub estimate: Estimate,
+    /// Music ElevenLabs would be asked to make, and roughly what that would cost.
+    pub music: music::Cost,
+    /// The one number a person agrees to: the voice and the music together.
+    /// Zero means making this video spends nothing.
+    pub credits: u64,
     /// For each scene of the plan, the speech heard on it: which voice, which
     /// take, and whether it is already recorded.
     pub speech: Vec<Vec<Heard>>,
@@ -75,6 +85,11 @@ fn needs_sound(setup: &Setup) -> bool {
     setup.output.video || setup.output.audio || setup.output.captions
 }
 
+/// The one number to agree to: what the voice would cost and what the music would.
+fn in_all(estimate: &Estimate, music: &music::Cost) -> u64 {
+    estimate.credits_to_record + music.credits
+}
+
 /// Plan the video and work out what it would cost. Spends nothing.
 pub fn look(paths: &Paths, setup: &Setup, ctx: &Context) -> Result<Look> {
     let mut plan = plan::build(setup, ctx)?;
@@ -85,8 +100,10 @@ pub fn look(paths: &Paths, setup: &Setup, ctx: &Context) -> Result<Look> {
     } else {
         (Estimate::default(), vec![Vec::new(); plan.scenes.len()])
     };
+    plan.warnings.extend(music::notes(setup));
+    let music = music::cost(paths, setup);
     let files = out_files(paths, setup, &plan).into_iter().map(|(_, p)| p.to_string_lossy().into_owned()).collect();
-    Ok(Look { plan, estimate, speech, key: secrets::source(), files })
+    Ok(Look { plan, credits: in_all(&estimate, &music), estimate, music, speech, key: secrets::source(), files })
 }
 
 /// Throw away the kept recordings heard on one scene, so they are recorded
@@ -147,8 +164,14 @@ pub struct Made {
     pub seconds: f32,
     /// Letters of new speech recorded this time.
     pub letters_recorded: u64,
-    /// Credits that recording spent, by ElevenLabs' own count wherever it gave one.
+    /// Credits known to have been spent: the voice by ElevenLabs' own count
+    /// wherever it gave one, and the music where its cost could be told.
     pub credits_spent: u64,
+    /// The music made this time, and what is known of its cost. None when no
+    /// music was made, which includes music already made and kept.
+    pub music: Option<MadeMusic>,
+    /// The same in a sentence, for showing to the person.
+    pub music_said: Option<String>,
     pub pace: Vec<PaceNote>,
     /// How long one Hail Mary takes, the easiest way to judge the pace. 9.2 in the first video.
     pub hail_mary_seconds: Option<f32>,
@@ -161,7 +184,7 @@ pub struct Request<'a> {
     pub paths: &'a Paths,
     pub setup: &'a Setup,
     pub ctx: &'a Context,
-    /// How many credits of new speech the person has agreed to spend.
+    /// How many credits the person has agreed to spend, on the voice and the music together.
     pub approved_credits: u64,
     /// Where ElevenLabs is. Only tests change this.
     pub voice_service: Option<String>,
@@ -191,6 +214,98 @@ impl Drop for WorkDir {
     }
 }
 
+/// What a making spent with ElevenLabs.
+#[derive(Debug, Default)]
+struct Spent {
+    recorded: speech::Recorded,
+    music: Option<MadeMusic>,
+}
+
+/// Saying what a video would spend, when nobody has agreed to it yet.
+fn asking(estimate: &Estimate, piece: Option<&Piece>) -> String {
+    let voice = estimate.credits_to_record;
+    match piece {
+        None => format!(
+            "Making this video would record {} letters of new speech with ElevenLabs. That spends about {voice} credits. Nothing has been spent yet.",
+            estimate.letters_to_record
+        ),
+        Some(p) if estimate.letters_to_record == 0 => format!(
+            "Making this video would have ElevenLabs make {} of music. That spends about {} credits. It is a rough figure: ElevenLabs does not give the price before it makes music. Nothing has been spent yet.",
+            minutes_words(p.minutes()),
+            p.estimate()
+        ),
+        Some(p) => format!(
+            "Making this video would record {} letters of new speech and make {} of music with ElevenLabs. That spends about {} credits in all: about {voice} for the voice and about {} for the music. \
+             The music's part is a rough figure: ElevenLabs does not give the price before it makes music. Nothing has been spent yet.",
+            estimate.letters_to_record,
+            minutes_words(p.minutes()),
+            voice + p.estimate(),
+            p.estimate()
+        ),
+    }
+}
+
+/// "2 minutes", "1 minute", "half a minute", "1.5 minutes"
+pub fn minutes_words(minutes: f32) -> String {
+    let m = (minutes * 100.0).round() / 100.0;
+    if (m - 1.0).abs() < 0.005 {
+        "1 minute".into()
+    } else if (m - 0.5).abs() < 0.005 {
+        "half a minute".into()
+    } else {
+        format!("{m} minutes")
+    }
+}
+
+/// Everything that costs credits happens here, and nowhere else: the voice
+/// first, then the music. `approved` is the one number the person agreed to.
+///
+/// - Nothing is spent unless `approved` covers the voice and the music together.
+/// - The voice stops before any piece that would go over `approved`.
+/// - The music is one request that cannot be stopped half way, so it is not
+///   started if what the voice really cost plus the music's rough cost would
+///   go over. What was recorded is kept either way.
+///
+/// `piece` is the music still to be made, if any. Kept music is not passed in.
+fn spend(paths: &Paths, client: &Client, script: &speech::Script, piece: Option<&Piece>, approved: u64, on_progress: &mut dyn FnMut(Progress), stopped: &dyn Fn() -> bool) -> Result<Spent> {
+    let mut spent = Spent::default();
+    let recording = speech::estimate(paths, script).letters_to_record > 0;
+    if recording {
+        // What each model charges, straight from ElevenLabs, so the number
+        // agreed to is the number it will come to. Asking is free. If the
+        // list cannot be had, the last one known is used.
+        if let Err(e) = speech::models(paths, client, false) {
+            log::warn!("could not fetch the list of models, so the cost is worked out from what is already known: {e}");
+        }
+    }
+    let estimate = speech::estimate(paths, script);
+    let music_cost = piece.map(Piece::estimate).unwrap_or(0);
+    if approved < estimate.credits_to_record + music_cost {
+        return Err(Error::NeedsApproval(asking(&estimate, piece)));
+    }
+    if recording {
+        on_progress(Progress { stage: Stage::Voice, message: format!("Recording the voice: 0 of {}", estimate.pieces_to_record), done: 0, total: estimate.pieces_to_record, fraction: 0.0 });
+        spent.recorded = speech::record(paths, client, script, Some(approved), |done, total| {
+            on_progress(Progress { stage: Stage::Voice, message: format!("Recording the voice: {done} of {total}"), done, total, fraction: weight(Stage::Voice, done, total, true) });
+            !stopped()
+        })?;
+    }
+    if let Some(piece) = piece {
+        if spent.recorded.credits + music_cost > approved {
+            return Err(Error::NeedsApproval(format!(
+                "Stopped before making the music, so as not to go over the {approved} credits agreed to. The voice cost {} credits, more than was expected, and the music would be about {music_cost} more. The speech is recorded and kept.",
+                spent.recorded.credits
+            )));
+        }
+        if stopped() {
+            return Err(Error::Cancelled);
+        }
+        on_progress(Progress { stage: Stage::Voice, message: format!("Making {} of music. This can take a few minutes.", minutes_words(piece.minutes())), done: 0, total: 1, fraction: weight(Stage::Voice, 1, 1, true) });
+        spent.music = Some(music::make(paths, client, piece)?);
+    }
+    Ok(spent)
+}
+
 pub fn make(req: &Request, on_progress: &mut dyn FnMut(Progress), cancel: &AtomicBool) -> Result<Made> {
     let started = Instant::now();
     let (paths, setup, ctx) = (req.paths, req.setup, req.ctx);
@@ -210,7 +325,7 @@ pub fn make(req: &Request, on_progress: &mut dyn FnMut(Progress), cancel: &Atomi
         }
     }
     let mut made_files: Vec<MadeFile> = Vec::new();
-    let mut recorded = speech::Recorded::default();
+    let mut spent = Spent::default();
     let mut pace: Vec<PaceNote> = Vec::new();
     let mut hail_mary_seconds = None;
     let mut seconds = plan.seconds;
@@ -226,36 +341,35 @@ pub fn make(req: &Request, on_progress: &mut dyn FnMut(Progress), cancel: &Atomi
             return Err(Error::setup(format!("These recordings could not be found: {}.", script.missing.join(", "))));
         }
         warnings.extend(speech::notes(paths, &script));
-        let recording = speech::estimate(paths, &script).letters_to_record > 0;
+        warnings.extend(music::notes(setup));
+        // The music this video plays, if the setup describes some, and whether it still has to be made.
+        let piece = Piece::wanted(setup);
+        let piece_to_make = piece.as_ref().filter(|p| !p.is_kept(paths));
+        // A sound file the person supplies is looked for now, so a wrong name costs nothing.
+        let supplied = match setup.music.file.as_deref().filter(|f| !f.trim().is_empty()) {
+            Some(name) => match plan::find_file(name, &ctx.search, &speech::SOUND_ENDINGS) {
+                Some(file) => Some(file),
+                None => return Err(Error::setup(format!("The music file could not be found: {name}."))),
+            },
+            None => None,
+        };
+        let new_speech = speech::estimate(paths, &script).letters_to_record > 0;
+        let recording = new_speech || piece_to_make.is_some();
         if recording {
             let Some((key, _)) = secrets::key()? else {
-                return Err(Error::voice(
+                return Err(Error::voice(if new_speech {
                     "This video needs a voice from ElevenLabs, and no API key has been saved yet. Add your key in the app under Settings. \
-                     Or make it with no voice: turn the voice off.",
-                ));
+                     Or make it with no voice: turn the voice off."
+                } else {
+                    "This video needs music made by ElevenLabs, and no API key has been saved yet. Add your key in the app under Settings. \
+                     Or make it without: take the words out of the background sound."
+                }));
             };
             let client = match &req.voice_service {
                 Some(base) => Client::with_base(&key, base)?,
                 None => Client::from_env(&key)?,
             };
-            // What each model charges, straight from ElevenLabs, so the number
-            // agreed to is the number it will come to. Asking is free. If the
-            // list cannot be had, the last one known is used.
-            if let Err(e) = speech::models(paths, &client, false) {
-                log::warn!("could not fetch the list of models, so the cost is worked out from what is already known: {e}");
-            }
-            let estimate = speech::estimate(paths, &script);
-            if req.approved_credits < estimate.credits_to_record {
-                return Err(Error::NeedsApproval(format!(
-                    "Making this video would record {} letters of new speech with ElevenLabs. That spends about {} credits. Nothing has been spent yet.",
-                    estimate.letters_to_record, estimate.credits_to_record
-                )));
-            }
-            on_progress(Progress { stage: Stage::Voice, message: format!("Recording the voice: 0 of {}", estimate.pieces_to_record), done: 0, total: estimate.pieces_to_record, fraction: 0.0 });
-            recorded = speech::record(paths, &client, &script, Some(req.approved_credits), |done, total| {
-                on_progress(Progress { stage: Stage::Voice, message: format!("Recording the voice: {done} of {total}"), done, total, fraction: weight(Stage::Voice, done, total, true) });
-                !stopped()
-            })?;
+            spent = spend(paths, &client, &script, piece_to_make, req.approved_credits, on_progress, &stopped)?;
         }
 
         // 2. The sound track.
@@ -267,12 +381,10 @@ pub fn make(req: &Request, on_progress: &mut dyn FnMut(Progress), cancel: &Atomi
         hail_mary_seconds = script.clips.iter().position(|c| c.lines.first().map(String::as_str) == Some("Hail Mary, full of grace,") && c.lines.len() == 8).map(|i| clips[i].seconds());
         let timeline: Timeline = audio::assemble(&plan, &script, &clips);
         seconds = timeline.seconds();
-        let music = match setup.music.file.as_deref().filter(|f| !f.trim().is_empty()) {
-            Some(name) => match plan::find_file(name, &ctx.search, &speech::SOUND_ENDINGS) {
-                Some(file) => Some((file, setup.music.volume)),
-                None => return Err(Error::setup(format!("The music file could not be found: {name}."))),
-            },
-            None => None,
+        let music = match supplied {
+            Some(file) => Some((file, setup.music.volume)),
+            // Music from ElevenLabs: kept from before, or made a moment ago. Its end is joined to its start so it goes round gently.
+            None => piece.as_ref().filter(|p| p.is_kept(paths)).map(|p| (music::loopable(&ffmpeg, &p.file(paths), &work.0), setup.music.volume)),
         };
         let sound = audio::master(&ffmpeg, &timeline, &work.0, music.as_ref().map(|(f, v)| (f.as_path(), *v)), &setup.room)?;
         let chapters = if setup.output.chapters {
@@ -334,16 +446,186 @@ pub fn make(req: &Request, on_progress: &mut dyn FnMut(Progress), cancel: &Atomi
         }
     }
     on_progress(Progress { stage: Stage::Finishing, message: "Done".into(), done: 1, total: 1, fraction: 1.0 });
+    let recorded = spent.recorded;
+    let music_charged = spent.music.as_ref().and_then(|m| m.charged).unwrap_or(0);
     log::info!("made \"{}\": {} file(s), {:.0} s long, {} letters recorded for {} credits", plan.name, made_files.len(), seconds, recorded.letters, recorded.credits);
     Ok(Made {
         name: plan.name.clone(),
         files: made_files,
         seconds,
         letters_recorded: recorded.letters,
-        credits_spent: recorded.credits,
+        credits_spent: recorded.credits + music_charged,
+        music_said: spent.music.as_ref().map(MadeMusic::said),
+        music: spent.music,
         pace,
         hail_mary_seconds,
         warnings,
         took: started.elapsed().as_secs_f32(),
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::setup::from_doc;
+    use serde_json::json;
+    use std::sync::atomic::AtomicUsize;
+    use std::sync::Arc;
+
+    fn temp(tag: &str) -> Paths {
+        let dir = std::env::temp_dir().join(format!("pvc-make-{tag}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        Paths::new(dir)
+    }
+
+    /// One decade, with what `more` adds: three prayers, 644 letters of speech.
+    fn decade(more: serde_json::Value) -> (Setup, speech::Script) {
+        let mut doc = json!({ "prayers": { "opening": false, "closing": false, "firstDecade": 1, "lastDecade": 1, "fatima": false }, "voice": { "announce": false } });
+        crate::setup::merge(&mut doc, &more);
+        let setup = from_doc(&doc).unwrap();
+        let ctx = Context { today: chrono::NaiveDate::from_ymd_opt(2026, 11, 19).unwrap(), search: vec![] };
+        let script = speech::script(&plan::build(&setup, &ctx).unwrap(), &[]);
+        (setup, script)
+    }
+
+    const ORGAN: &str = "slow, quiet organ in an empty chapel";
+
+    /// A stand-in ElevenLabs with one voice. Each time the account is asked,
+    /// its credits used read the next of `readings`, and the last one after that.
+    fn service(server: &mut mockito::Server, readings: &'static [i64]) {
+        server.mock("GET", "/v2/voices").match_query(mockito::Matcher::Any).with_body(r#"{"voices":[{"voice_id":"imp","name":"Imperial - Male"}],"has_more":false}"#).create();
+        let asked = Arc::new(AtomicUsize::new(0));
+        server
+            .mock("GET", "/v1/user/subscription")
+            .with_body_from_request(move |_| {
+                let n = asked.fetch_add(1, Ordering::SeqCst).min(readings.len() - 1);
+                format!(r#"{{"character_count":{},"character_limit":100000}}"#, readings[n]).into_bytes()
+            })
+            .create();
+    }
+
+    /// Speech that ElevenLabs charges `cost` credits a piece for, expected `times` times.
+    fn speech_mock(server: &mut mockito::Server, cost: u64, times: usize) -> mockito::Mock {
+        server.mock("POST", "/v1/text-to-speech/imp/with-timestamps").match_query(mockito::Matcher::Any).with_header("character-cost", &cost.to_string()).with_body(r#"{"audio_base64":"AAEC"}"#).expect(times).create()
+    }
+
+    fn music_mock(server: &mut mockito::Server, times: usize) -> mockito::Mock {
+        server.mock("POST", "/v1/music").match_query(mockito::Matcher::Any).with_body([7u8, 7, 7]).expect(times).create()
+    }
+
+    fn go(paths: &Paths, client: &Client, script: &speech::Script, piece: Option<&Piece>, approved: u64) -> Result<Spent> {
+        spend(paths, client, script, piece, approved, &mut |_| {}, &|| false)
+    }
+
+    #[test]
+    fn one_number_covers_the_voice_and_the_music() {
+        let paths = temp("one-number");
+        let number = |more: serde_json::Value| -> (u64, u64, u64) {
+            let (setup, script) = decade(more);
+            let (voice, music) = (speech::estimate(&paths, &script), music::cost(&paths, &setup));
+            (voice.credits_to_record, music.credits, in_all(&voice, &music))
+        };
+        // The voice alone, as it always was.
+        assert_eq!(number(json!({})), (644, 0, 644));
+        // Music alone: a video with no generated voice still has something to agree to.
+        assert_eq!(number(json!({ "voice": { "on": false }, "music": { "prompt": ORGAN, "minutes": 0.5 } })), (0, 450, 450));
+        // Both: one number, the two added.
+        assert_eq!(number(json!({ "music": { "prompt": ORGAN } })), (644, 1800, 2444));
+        // A supplied file is not made by anyone, so it costs nothing.
+        assert_eq!(number(json!({ "music": { "prompt": ORGAN, "file": "chant.mp3" } })), (644, 0, 644));
+
+        // And the asking names what the number is for, and says the music's part is rough.
+        let (setup, script) = decade(json!({ "music": { "prompt": ORGAN } }));
+        let (voice, piece) = (speech::estimate(&paths, &script), Piece::wanted(&setup).unwrap());
+        let both = asking(&voice, Some(&piece));
+        assert!(both.contains("about 2444 credits in all") && both.contains("about 644 for the voice") && both.contains("about 1800 for the music") && both.contains("rough figure"), "{both}");
+        let only_voice = asking(&voice, None);
+        assert!(only_voice.contains("644 letters") && only_voice.contains("about 644 credits") && !only_voice.contains("music"), "{only_voice}");
+        let only_music = asking(&Estimate::default(), Some(&piece));
+        assert!(only_music.contains("2 minutes of music") && only_music.contains("about 1800 credits") && only_music.contains("rough figure") && !only_music.contains("speech"), "{only_music}");
+        assert_eq!((minutes_words(1.0), minutes_words(0.5), minutes_words(1.5)), ("1 minute".to_string(), "half a minute".to_string(), "1.5 minutes".to_string()));
+    }
+
+    #[test]
+    fn nothing_is_spent_unless_the_yes_covers_voice_and_music_together() {
+        let paths = temp("gate");
+        let (setup, script) = decade(json!({ "music": { "prompt": ORGAN, "minutes": 0.5 } }));
+        let piece = Piece::wanted(&setup).unwrap();
+        let mut server = mockito::Server::new();
+        service(&mut server, &[0]);
+        let (never_speech, never_music) = (speech_mock(&mut server, 1, 0), music_mock(&mut server, 0));
+        let client = Client::with_base("k", &server.url()).unwrap();
+
+        // A yes for the voice alone (644), or for the music alone (450), is not a yes for both (1,094).
+        for approved in [0, 450, 644, 1093] {
+            let err = go(&paths, &client, &script, Some(&piece), approved).unwrap_err();
+            assert!(matches!(err, Error::NeedsApproval(_)), "{approved}: {err}");
+            assert!(err.to_string().contains("about 1094 credits in all"), "{err}");
+        }
+        never_speech.assert();
+        never_music.assert();
+        let _ = std::fs::remove_dir_all(&paths.data);
+    }
+
+    #[test]
+    fn the_voice_then_the_music_and_each_is_kept() {
+        let paths = temp("both");
+        let (setup, script) = decade(json!({ "music": { "prompt": ORGAN, "minutes": 0.5 } }));
+        let piece = Piece::wanted(&setup).unwrap();
+        let mut server = mockito::Server::new();
+        // The account read 2,000 before the music and 2,430 after: 430, not the rough 450.
+        service(&mut server, &[2000, 2430]);
+        let (speech_calls, music_calls) = (speech_mock(&mut server, 200, 3), music_mock(&mut server, 1));
+        let client = Client::with_base("k", &server.url()).unwrap();
+        let spent = go(&paths, &client, &script, Some(&piece), 1094).unwrap();
+        speech_calls.assert();
+        music_calls.assert();
+        assert_eq!((spent.recorded.pieces, spent.recorded.credits), (3, 600));
+        let made = spent.music.unwrap();
+        assert_eq!((made.charged, made.known_by, made.estimate), (Some(430), music::KnownBy::Counted, 450));
+        // Making the same video again asks for nothing.
+        assert_eq!(speech::estimate(&paths, &script).credits_to_record, 0);
+        assert_eq!(music::cost(&paths, &setup), music::Cost { wanted: true, kept: true, minutes: 0.5, credits: 0 });
+        let _ = std::fs::remove_dir_all(&paths.data);
+    }
+
+    #[test]
+    fn the_music_is_not_started_when_the_voice_cost_more_than_expected() {
+        let paths = temp("overrun");
+        let (setup, script) = decade(json!({ "music": { "prompt": ORGAN, "minutes": 0.5 } }));
+        let piece = Piece::wanted(&setup).unwrap();
+        let mut server = mockito::Server::new();
+        service(&mut server, &[0]);
+        // 644 was expected for the voice. ElevenLabs charges 300 a piece: 900.
+        let (speech_calls, never_music) = (speech_mock(&mut server, 300, 3), music_mock(&mut server, 0));
+        let client = Client::with_base("k", &server.url()).unwrap();
+        let err = go(&paths, &client, &script, Some(&piece), 1094).unwrap_err();
+        speech_calls.assert();
+        never_music.assert();
+        assert!(matches!(err, Error::NeedsApproval(_)), "{err}");
+        let said = err.to_string();
+        assert!(said.contains("Stopped before making the music") && said.contains("1094 credits agreed to") && said.contains("The voice cost 900") && said.contains("about 450 more"), "{said}");
+        // The speech is kept, so only the music is left to agree to.
+        assert_eq!((speech::estimate(&paths, &script).credits_to_record, music::cost(&paths, &setup).credits), (0, 450));
+        let _ = std::fs::remove_dir_all(&paths.data);
+    }
+
+    #[test]
+    fn music_alone_is_agreed_to_and_made_once() {
+        let paths = temp("music-only");
+        let (setup, script) = decade(json!({ "voice": { "on": false }, "music": { "prompt": ORGAN, "minutes": 0.5 } }));
+        assert!(script.clips.is_empty());
+        let piece = Piece::wanted(&setup).unwrap();
+        let mut server = mockito::Server::new();
+        service(&mut server, &[100, 550]);
+        let (never_speech, music_calls) = (speech_mock(&mut server, 1, 0), music_mock(&mut server, 1));
+        let client = Client::with_base("k", &server.url()).unwrap();
+        assert!(matches!(go(&paths, &client, &script, Some(&piece), 449), Err(Error::NeedsApproval(_))));
+        let spent = go(&paths, &client, &script, Some(&piece), 450).unwrap();
+        never_speech.assert();
+        music_calls.assert();
+        assert_eq!((spent.recorded, spent.music.unwrap().charged), (speech::Recorded::default(), Some(450)));
+        assert!(piece.is_kept(&paths));
+        let _ = std::fs::remove_dir_all(&paths.data);
+    }
 }

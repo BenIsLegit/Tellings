@@ -699,11 +699,32 @@ pub struct Music {
     pub file: Option<String>,
     /// How loud it is under the voice. 0 to 1.
     pub volume: f32,
+    /// Words describing music for ElevenLabs to make. Used when no file is
+    /// supplied. Making it spends credits, once: the piece is kept.
+    pub prompt: Option<String>,
+    /// How long a piece to make, in minutes. It loops under the whole video.
+    pub minutes: f32,
+    /// No singing.
+    pub instrumental: bool,
+    /// Which piece. ElevenLabs makes a different one each time it is asked, so
+    /// a new number here gets another piece from the same words.
+    pub take: u32,
+}
+
+impl Music {
+    /// The words for ElevenLabs to make music from, when there are any and no
+    /// sound file has been supplied. A supplied file always wins.
+    pub fn words(&self) -> Option<&str> {
+        if self.file.as_deref().is_some_and(|f| !f.trim().is_empty()) {
+            return None;
+        }
+        self.prompt.as_deref().map(str::trim).filter(|p| !p.is_empty())
+    }
 }
 
 impl Default for Music {
     fn default() -> Self {
-        Music { file: None, volume: 0.12 }
+        Music { file: None, volume: 0.12, prompt: None, minutes: 2.0, instrumental: true, take: 1 }
     }
 }
 
@@ -934,6 +955,23 @@ impl Setup {
                 "room.amount must be between 0 and 1. 0 is no echo and 1 is an echo as loud as the voice. It is {}.",
                 self.room.amount
             )));
+        }
+        if !(0.5..=5.0).contains(&self.music.minutes) {
+            return Err(Error::setup(format!(
+                "music.minutes must be between 0.5 and 5. That is how long a piece ElevenLabs makes, and it loops under the whole video. It is {}.",
+                self.music.minutes
+            )));
+        }
+        if !(1..=99).contains(&self.music.take) {
+            return Err(Error::setup(format!("music.take must be a whole number from 1 to 99. A new number asks for a different piece from the same words. It is {}.", self.music.take)));
+        }
+        if let Some(words) = &self.music.prompt {
+            if words.chars().count() > 2000 {
+                return Err(Error::setup(format!(
+                    "music.prompt is {} letters long. Keep it under 2,000: a sentence or two about the sound is enough.",
+                    words.chars().count()
+                )));
+            }
         }
         let base = self.style();
         check_style(&base, "The setup")?;

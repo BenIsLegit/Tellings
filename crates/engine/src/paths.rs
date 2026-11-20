@@ -59,6 +59,10 @@ impl Paths {
     pub fn clips(&self) -> PathBuf {
         self.data.join("cache").join("clips")
     }
+    /// Music from ElevenLabs, exactly as it arrived. Paid for, so never deleted by a render.
+    pub fn music(&self) -> PathBuf {
+        self.data.join("cache").join("music")
+    }
     pub fn voices_file(&self) -> PathBuf {
         self.data.join("cache").join("voices.json")
     }
