@@ -1,0 +1,5 @@
+{
+  "name": "Words Only",
+  "description": "No voice and no credits spent. Each bead waits long enough to read.",
+  "voice": { "on": false }
+}

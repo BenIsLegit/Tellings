@@ -1,0 +1,118 @@
+/*
+  One frame of a prayer video.
+
+  This is the first video's frame (prototype/frame.html) with its fixed numbers
+  turned into three scales, so the same drawing fits any screen:
+
+    --u  layout: 1 on the Pixel 9 Pro Fold inner screen (2076 x 2152)
+    --b  the bead drawing
+    --t  the words
+
+  On the Fold all three are 1 and every number below is the first video's.
+*/
+
+.pvc-stage {
+  --ground: #0E1626;
+  --surface: #172138;
+  --ink: #E7ECF5;
+  --muted: #9BA8C0;
+  --line: #34425F;
+  --done: #6F80A6;
+  --brass: #E6B556;
+  --bead: #9A6B43;
+  --cord: var(--line);
+  --display: "Cardo", "GFS Baskerville", "Crimson Text", Georgia, serif;
+  --body: "Fira Sans", "Source Sans 3", "DejaVu Sans", sans-serif;
+  --u: 1;
+  --b: 1;
+  --t: 1;
+  position: relative;
+  overflow: hidden;
+  background: var(--ground);
+  color: var(--ink);
+  font-family: var(--body);
+  font-size: 16px;
+  font-weight: 400;
+  font-style: normal;
+  line-height: normal;
+  letter-spacing: normal;
+  text-align: left;
+  text-transform: none;
+  transform-origin: 0 0;
+}
+.pvc-stage *, .pvc-stage *::before, .pvc-stage *::after { box-sizing: border-box; margin: 0; padding: 0; border: 0 solid; }
+.pvc-stage [hidden] { display: none !important; }
+.pvc-inner { position: absolute; }
+
+/* The picture, when it fills the whole screen. Dimmed so the words stay easy to read. */
+.pvc-bg { position: absolute; inset: 0; overflow: hidden; }
+.pvc-bg::after { content: ""; position: absolute; inset: 0; background: var(--ground); opacity: .78; }
+.pvc-bg img, .pvc-art img, .pvc-side img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; display: block; }
+
+/* The beads */
+.pvc-beads { position: absolute; overflow: visible; }
+.pvc-beads .chain { fill: none; stroke: var(--cord); stroke-width: 1.4; }
+.pvc-beads.cord .chain { stroke-width: 2.6; stroke-linecap: round; }
+.pvc-beads .bead .dot { fill: var(--ground); stroke: var(--ink); stroke-width: 1.3; }
+.pvc-beads .bead.done .dot { fill: var(--done); stroke: var(--done); }
+.pvc-beads .bead.now .dot { fill: var(--brass); stroke: var(--brass); }
+.pvc-beads .bead .glow { fill: var(--brass); opacity: 0; }
+.pvc-beads .bead .halo { fill: none; stroke: var(--brass); stroke-width: 1.6; opacity: 0; }
+.pvc-beads .bead.now .glow { opacity: .16; }
+.pvc-beads .bead.now .halo { opacity: .9; }
+.pvc-beads .bead.cross .halo { stroke-width: 7; stroke-linejoin: round; opacity: 0; }
+.pvc-beads .bead.cross.now .halo { opacity: .35; }
+.pvc-beads .bead .inlay { fill: none; stroke: var(--ink); stroke-width: 1.4; stroke-linecap: round; stroke-linejoin: round; }
+.pvc-beads .bead.done .inlay, .pvc-beads .bead.now .inlay { stroke: var(--ground); }
+.pvc-beads .bead .ring { fill: none; stroke: var(--ink); stroke-width: 3; }
+.pvc-beads .bead.done .ring { stroke: var(--done); }
+.pvc-beads .bead.now .ring { stroke: var(--brass); }
+.pvc-beads .bead.gap .dot { opacity: 0; }
+.pvc-beads .bead.gap.now .dot { opacity: 1; }
+
+/* Beads with a material. The bead you are on is always the marker color, whatever the material. */
+.pvc-beads.mat .bead.round .dot { fill: url(#pvc-mat); stroke: none; }
+.pvc-beads.mat .bead.round.done .dot { fill: url(#pvc-mat); opacity: .4; }
+.pvc-beads.mat .bead.round.now .dot { fill: var(--brass); opacity: 1; }
+.pvc-beads .bead .knot { fill: none; stroke: var(--ground); stroke-width: 1; stroke-linecap: round; opacity: .7; }
+.pvc-beads .bead.now .knot { opacity: .5; }
+
+/* The picture inside the loop */
+.pvc-art { position: absolute; border-radius: 50%; overflow: hidden; background: var(--surface); box-shadow: 0 0 0 calc(var(--b) * 3px) var(--line); }
+
+.pvc-center { position: absolute; transform: translate(-50%, -50%); display: grid; gap: calc(var(--b) * 18px); justify-items: center; text-align: center; }
+.pvc-center .set { font-size: calc(var(--b) * 34px); letter-spacing: .16em; text-transform: uppercase; color: var(--muted); }
+.pvc-center .num { font-family: var(--display); font-size: calc(var(--b) * 200px); line-height: .95; }
+.pvc-center .name { font-family: var(--display); font-size: calc(var(--b) * 72px); line-height: 1.16; text-wrap: balance; }
+
+/* The prayer column */
+.pvc-col { position: absolute; overflow: hidden; display: flex; flex-direction: column; gap: calc(var(--t) * 36px); }
+.pvc-col > * { flex: none; }
+.pvc-side { position: relative; width: 100%; border-radius: calc(var(--u) * 28px); overflow: hidden; background: var(--surface); box-shadow: inset 0 0 0 calc(var(--u) * 3px) var(--line); }
+.pvc-col .where { font-size: calc(var(--t) * 46px); line-height: 1.3; color: var(--muted); }
+.pvc-col .title { font-family: var(--display); font-weight: 400; font-size: calc(var(--t) * 128px); line-height: 1.02; text-wrap: balance; }
+.pvc-col .pips { display: flex; gap: calc(var(--t) * 14px); }
+.pvc-col .pip { width: calc(var(--t) * 36px); height: calc(var(--t) * 36px); border-radius: 50%; border: calc(var(--t) * 4px) solid var(--ink); }
+.pvc-col .pip.done { background: var(--done); border-color: var(--done); }
+.pvc-col .pip.now { background: var(--brass); border-color: var(--brass); }
+.pvc-col .tag { align-self: flex-start; font-size: calc(var(--t) * 38px); line-height: 1.3; color: var(--muted); border: calc(var(--t) * 3px) solid var(--line); border-radius: calc(var(--t) * 28px); padding: calc(var(--t) * 10px) calc(var(--t) * 28px); }
+.pvc-col .announce { border-left: calc(var(--t) * 8px) solid var(--brass); padding: calc(var(--t) * 4px) 0 calc(var(--t) * 6px) calc(var(--t) * 32px); display: grid; gap: calc(var(--t) * 10px); }
+.pvc-col .announce .small { font-size: calc(var(--t) * 40px); color: var(--muted); }
+.pvc-col .announce .say { font-family: var(--display); font-size: calc(var(--t) * 66px); line-height: 1.16; text-wrap: balance; }
+.pvc-col .prayer { font-size: calc(var(--t) * 78px); line-height: 1.38; display: grid; gap: .1em; }
+.pvc-col .prayer span { display: block; padding-left: 1.1em; text-indent: -1.1em; }
+.pvc-col .prayer.follow span { opacity: .42; }
+.pvc-col .prayer.follow span.on { opacity: 1; color: var(--brass); }
+.pvc-col .hint { font-size: calc(var(--t) * 42px); line-height: 1.3; color: var(--muted); }
+
+/* The foot of the frame */
+.pvc-credit { position: absolute; font-size: calc(var(--u) * 34px); color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.pvc-count { position: absolute; font-size: calc(var(--u) * 36px); color: var(--muted); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.pvc-track { position: absolute; height: calc(var(--u) * 6px); border-radius: calc(var(--u) * 3px); background: var(--line); }
+.pvc-track i { display: block; height: 100%; border-radius: calc(var(--u) * 3px); background: var(--muted); width: 0; }
+
+/* The tap-through guide: the same frame, moved by hand. */
+.pvc-guide { position: fixed; inset: 0; background: #05080f; display: grid; place-items: center; overflow: hidden; cursor: pointer; user-select: none; -webkit-tap-highlight-color: transparent; }
+.pvc-guide .pvc-fit { position: relative; }
+.pvc-guide-help { position: fixed; left: 0; right: 0; bottom: 10px; text-align: center; font: 500 15px "Fira Sans", system-ui, sans-serif; color: #9BA8C0; opacity: .85; pointer-events: none; transition: opacity .6s; }
+.pvc-guide-help.gone { opacity: 0; }

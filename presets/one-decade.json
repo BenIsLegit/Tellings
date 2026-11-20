@@ -1,0 +1,5 @@
+{
+  "name": "One Decade",
+  "description": "Just the first decade: one Our Father, ten Hail Marys, the Glory Be.",
+  "prayers": { "opening": false, "closing": false, "firstDecade": 1, "lastDecade": 1 }
+}

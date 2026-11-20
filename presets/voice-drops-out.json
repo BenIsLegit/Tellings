@@ -1,0 +1,5 @@
+{
+  "name": "Voice Drops Out",
+  "description": "The voice says the first three Hail Marys of each decade, then leaves the rest to you.",
+  "voice": { "dropAfter": 3 }
+}

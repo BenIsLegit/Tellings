@@ -1,0 +1,12 @@
+{
+  "name": "Luminous Mysteries",
+  "description": "The first video, as it was made. One painting for each mystery. Prayed on Thursdays.",
+  "prayers": { "mysteries": "luminous" },
+  "rules": [
+    { "for": { "mystery": 1 }, "set": { "picture": { "file": "pictures/luminous-1", "focus": "50% 90%", "credit": "Piero della Francesca, The Baptism of Christ, c. 1450" } } },
+    { "for": { "mystery": 2 }, "set": { "picture": { "file": "pictures/luminous-2", "focus": "50% 8%", "credit": "Giotto, Marriage at Cana (detail), Scrovegni Chapel, c. 1305" } } },
+    { "for": { "mystery": 3 }, "set": { "picture": { "file": "pictures/luminous-3", "focus": "50% 15%", "credit": "Carl Bloch, The Sermon on the Mount, 1877" } } },
+    { "for": { "mystery": 4 }, "set": { "picture": { "file": "pictures/luminous-4", "focus": "50% 0%", "zoom": 1.2, "credit": "Raphael, The Transfiguration (detail), 1516–20" } } },
+    { "for": { "mystery": 5 }, "set": { "picture": { "file": "pictures/luminous-5", "focus": "50% 50%", "credit": "Juan de Juanes, The Last Supper, c. 1562" } } }
+  ]
+}

@@ -1,0 +1,5 @@
+{
+  "name": "Wooden Beads",
+  "description": "Brown wooden beads on a cord.",
+  "beads": { "style": "wood", "cord": "cord", "cordColor": "#8A7A63" }
+}

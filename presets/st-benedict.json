@@ -1,0 +1,5 @@
+{
+  "name": "St. Benedict Rosary",
+  "description": "The same 59 beads, with a St. Benedict medal and a St. Benedict cross.",
+  "beads": { "medal": "st-benedict", "cross": "st-benedict" }
+}

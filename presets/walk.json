@@ -1,0 +1,5 @@
+{
+  "name": "For a Walk",
+  "description": "Sound only, with chapters. For praying with the beads in your hand.",
+  "output": { "video": false, "audio": true }
+}

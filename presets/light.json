@@ -1,0 +1,5 @@
+{
+  "name": "Light",
+  "description": "Dark words on a warm light background.",
+  "colors": { "mode": "light" }
+}

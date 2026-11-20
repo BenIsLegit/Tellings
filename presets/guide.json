@@ -1,0 +1,6 @@
+{
+  "name": "Tap-Through Guide",
+  "description": "No video and no voice. A page you tap through, one bead at a time, at your own pace.",
+  "voice": { "on": false },
+  "output": { "video": false, "guide": true }
+}

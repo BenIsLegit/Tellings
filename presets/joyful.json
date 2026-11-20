@@ -1,0 +1,5 @@
+{
+  "name": "Joyful Mysteries",
+  "description": "The whole rosary. Prayed on Mondays and Saturdays.",
+  "prayers": { "mysteries": "joyful" }
+}

@@ -1,0 +1,5 @@
+{
+  "name": "Follow Along",
+  "description": "The line being spoken lights up as the voice says it.",
+  "words": { "follow": true }
+}
