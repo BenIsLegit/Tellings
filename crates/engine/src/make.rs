@@ -274,7 +274,7 @@ pub fn make(req: &Request, on_progress: &mut dyn FnMut(Progress), cancel: &Atomi
             },
             None => None,
         };
-        let sound = audio::master(&ffmpeg, &timeline, &work.0, music.as_ref().map(|(f, v)| (f.as_path(), *v)))?;
+        let sound = audio::master(&ffmpeg, &timeline, &work.0, music.as_ref().map(|(f, v)| (f.as_path(), *v)), &setup.room)?;
         let chapters = if setup.output.chapters {
             let file = work.0.join("chapters.txt");
             std::fs::write(&file, video::chapters(&plan, &timeline))?;
