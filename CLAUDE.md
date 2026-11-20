@@ -61,7 +61,7 @@ The mysteries by day: Joyful on Monday and Saturday. Sorrowful on Tuesday and Fr
 
 ### The words
 
-Use the traditional wording of each prayer exactly. The wording used in the first video is in `prototype/core.js`. Don't reword or modernize a prayer unless I pick a different wording. Label optional prayers as optional.
+Use the traditional wording of each prayer exactly. The wording used in the first video is in `crates/engine/src/prayers.rs`, copied line for line from `prototype/core.js`. Don't reword or modernize a prayer unless I pick a different wording. Label optional prayers as optional.
 
 If you quote Scripture, use the NLT, word for word.
 
@@ -94,6 +94,12 @@ If you quote Scripture, use the NLT, word for word.
 ## When I ask for a video
 
 Read [AGENTS.md](AGENTS.md). It has the steps. In short: use the `pvc` tool, show me the credit cost before spending anything, then tell me where the file is.
+
+## When I ask you to change the tool
+
+[AGENTS.md](AGENTS.md) has the commands, how the code fits together, and how to check a change. The line below loads it along with this file.
+
+@AGENTS.md
 
 ## Versioning
 

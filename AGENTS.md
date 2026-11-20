@@ -123,6 +123,31 @@ Use pictures the person supplies, or ones in the public domain. Every picture ne
 
 The module list at the top of `crates/engine/src/lib.rs` shows the path a video takes.
 
+### How it fits together
+
+A setup is a small JSON file that holds only what differs from the defaults. The rest follows from that.
+
+- **Sparse in, full out.** `library::resolve` folds in whatever the setup `extends`. A child's rules are added after its parent's. `setup::from_doc` lays the result over `Setup::default()` and checks it. A `null` puts a setting back to its default. Both shells keep the sparse setup and hand it to the engine, so saving keeps only the changes.
+- **The plan is the whole video as data.** `plan::build` lists every scene in order and picks the narrowest rule for each. Everything after it reads the plan, not the setup.
+- **`renderer/frame.js` draws from the plan and decides nothing.** It is a plain script: no imports, no build step. The engine puts it in a page and photographs it with Chrome or Edge, with no window (`frames.rs`, `cdp.rs`). The app's preview loads the same file (`Preview.svelte`).
+- **The window works nothing out.** After every change the editor (`src/lib/stores/editor.svelte.ts`) sends the sparse setup to `setup_look` and shows the plan and the cost that come back.
+- **Sound sets the timing.** Each still is held for as long as its sound lasts. With no voice, the pace settings say how long.
+- **One gate for credits.** `make::look` is free. `make::make` stops with `NeedsApproval` unless the approved number covers the letters still to record. One letter is about one credit.
+
+### What has to stay in step
+
+- **A new setting:** the field and its default in `setup.rs`, its description in `reference.rs`, its type in `src/lib/types.ts`, a control in the matching panel in `src/lib/views/panels/`, then `docs/settings.md`. If the drawing needs it, carry it into the scene in `plan.rs` and read it in `renderer/frame.js`.
+- **A new preset:** the file in `presets/`, and a line in the `PRESETS` list in `library.rs`.
+- **A new app command:** the function in `src-tauri/src/commands/`, the list in `src-tauri/src/lib.rs`, and `src/lib/api.ts`.
+- **The five groups that narrow** (`voice`, `pace`, `words`, `picture`, `colors`) are named in `setup.rs`, `reference.rs` and `editor.svelte.ts`.
+- **The app's id** is in `paths.rs` and `src-tauri/tauri.conf.json`. It names the data folder and the saved key.
+
+### Kept speech is paid for
+
+Setups, pictures and recorded speech live outside the repo, in the app's own folder (`%APPDATA%\gg.cathedral.prayer-video-creator` on Windows). The app and `pvc` share it.
+
+Each recording is filed under a hash of the voice, its settings and the exact words (`raw_key` in `speech.rs`). Change what goes into that hash, or one letter of a prayer, and the person pays to record it all again.
+
 ### Rules that come from CLAUDE.md
 
 - **The wording of prayers** is in `crates/engine/src/prayers.rs`, copied from the first video. Do not reword it.
@@ -132,22 +157,41 @@ The module list at the top of `crates/engine/src/lib.rs` shows the path a video 
 - **Scripture** is NLT, word for word, supplied by the person. Do not type it from memory.
 - **Every setting has a default** and is described in `crates/engine/src/reference.rs`. A test fails if you add a setting without describing it. After changing settings, run `pvc options --markdown > docs/settings.md`.
 - **Anything that changes how the first video looks or sounds**: ask first.
+- **Anything the person reads** (an error, a note, a label in the app) says what went wrong and what to do, in plain words.
 
 ### Checking your work
 
 ```
-cargo test -p pvc-engine      the engine's tests
-npm run check                 the window's type check
-npm test                      the window's tests
-build.bat                     everything above, then builds the app and pvc
-start.bat                     opens the app from this folder
+cargo test -p pvc-engine                              the engine's tests
+cargo test -p pvc-engine the_narrowest_choice_wins    one test, by name
+cargo test -p pvc-engine plan::                       the tests in one file
+npm run check                                         the window's type check
+npm test                                              the window's tests
+node --test src/lib/utils/path.test.ts                one of the window's test files
+build.bat                                             everything above, then builds the app and pvc
+start.bat                                             opens the app from this folder
 ```
+
+There is no linter and no formatter. Do not run `cargo fmt`. It would rewrite nearly every Rust file.
 
 To see a change to the drawing, use `pvc frame` and look at the picture.
 
 To look at the app's window while the person has their own copy open, start a second copy with `PVC_SECOND_WINDOW=1`, its own `PVC_DATA_DIR`, and its own `WEBVIEW2_USER_DATA_FOLDER`. Without the first, the app only shows the window that is already open. Close your copy when you are done. If they started the app with `start.bat`, it rebuilds and restarts by itself each time you change the code.
 
 To test the voice without spending credits, run the stand-in service, `node dev/stand-in-elevenlabs.mjs` (Windows only). The steps are at the top of that file. Always set `PVC_DATA_DIR` to a scratch folder while you do, so stand-in speech is never kept as if it were the person's real voice. Pass `--to` a scratch folder too, or the test video lands in their Videos folder.
+
+To drive the app's window, start your copy with `WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS=--remote-debugging-port=9347`. Then `pvc dev-shot 9347 script.js --to shot.png` runs a script in the window and takes a picture of it. Every control has a `data-testid`.
+
+Settings for a test run, set outside the tool:
+
+```
+PVC_DATA_DIR              a different folder for setups and kept speech
+PVC_ELEVENLABS_URL        where ElevenLabs is (the stand-in)
+ELEVENLABS_API_KEY        a key for one run, used before the saved one
+PVC_FFMPEG, PVC_BROWSER   where FFmpeg or the browser is
+PVC_KEEP_WORK             keep the stills and working files after a run
+PVC_SECOND_WINDOW         let a second copy of the app start
+```
 
 ### Versioning
 
