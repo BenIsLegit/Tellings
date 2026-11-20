@@ -182,6 +182,8 @@ export interface ModelInfo {
   canUseSpeakerBoost: boolean;
   /** True when it reads a tag like [reverent] as direction, instead of saying it aloud. */
   takesDirection: boolean;
+  /** True when it can record two voices together, as one conversation. */
+  speaksDialogue: boolean;
   languages: { id: string; name: string }[];
 }
 

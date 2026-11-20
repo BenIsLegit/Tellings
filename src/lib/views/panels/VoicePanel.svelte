@@ -39,6 +39,8 @@
 
   let model = $derived(String(editor.valueFor("voice.model", editor.activeTarget) ?? ""));
   let modelInfo = $derived(models.find((m) => m.id === model));
+  /** The second voice, if one answers here. Recording the two together only means something with one. */
+  let second = $derived(String(editor.valueFor("voice.respond", editor.activeTarget) ?? "").trim());
 
   /** The settings each voice has at ElevenLabs, as far as they have been asked for. null = asked, and not to be had. */
   let asked = $state<Record<string, OwnSettings | null>>({});
@@ -195,6 +197,19 @@
     <div class="-mt-1 pb-2">
       <Button size="sm" testid="voice-respond-choose-btn" onclick={() => (picking = "voice.respond")}>Choose from my voices…</Button>
     </div>
+    {#if second !== "" || editor.valueFor("voice.together", editor.activeTarget)}
+      <Setting
+        path="voice.together"
+        label="Record the two together"
+        kind="toggle"
+        help="Both halves are recorded in one go, as one conversation, so the answer follows on from the leader. It costs the same, and is kept for this pair of voices like any recording. Only Eleven v4 and Eleven v3 can."
+      />
+      {#if modelInfo && !modelInfo.speaksDialogue}
+        <p class="-mt-1 pb-2 text-xs leading-relaxed text-amber-400" data-testid="voice-together-cannot">
+          {modelInfo.name} cannot record two voices together. Here the two halves are recorded one after the other. Choose Eleven v4 or Eleven v3 above to record them together.
+        </p>
+      {/if}
+    {/if}
     <Setting path="voice.dropAfter" label="The voice drops out after" kind="number" min={0} max={9} slider={false} unit="Hail Marys" help="0 means it says them all. 3 means it says the first three of each decade, then leaves the rest to you." />
   </Group>
 
