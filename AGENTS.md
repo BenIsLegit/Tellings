@@ -27,7 +27,7 @@ On Windows run `.\pvc.bat`. On macOS or Linux run `./pvc`. The first run builds 
 
    It prints the length, the voices, the pictures, the files it would write, and a `Credits:` line.
 
-3. **If `Credits:` is not "none", stop and ask.** Tell the person the number in one sentence, like "This will spend about 2,573 ElevenLabs credits. OK?" Wait for a yes in this conversation. An earlier yes for a different video does not count.
+3. **If `Credits:` is not "none", stop and ask.** Tell the person the number in one sentence, like "This will spend about 2,573 ElevenLabs credits. OK?" Wait for a yes in this conversation. An earlier yes for a different video does not count. The number on the `Credits:` line is the whole of it: the voice, and music from ElevenLabs if the setup asks for some.
 
 4. **Make it.**
 
@@ -50,6 +50,7 @@ On Windows run `.\pvc.bat`. On macOS or Linux run `./pvc`. The first run builds 
 --no-voice                               words on screen only, no credits
 --screen tv-1080p                        see pvc options for the sizes
 --set room.kind=church                   the voice in a room: chapel | church | cathedral. No credits
+--set "music.prompt=slow, quiet organ"   background music made by ElevenLabs. Spends credits: see below
 --to "C:\some\folder"                    where the files go
 --set words.follow=true                  any setting from pvc options
 --rule "mystery=3: voice.name=Bella"     a setting for only part of the video
@@ -82,6 +83,22 @@ One recording of the Hail Mary played 53 times sounds stamped out. These setting
 **Variety costs credits.** On a whole rosary, one take is about 2,600 credits, five takes about 5,800, and a new recording every time about 16,300. Each recording is made once and kept. Run `pvc show` again after adding variety, and ask about the new number.
 
 If one recording came out wrong, `pvc rerecord luminous --scene d1b3` throws away what is heard on that bead. Pass the same setup and changes you make the video with. The next `pvc make` records it afresh and asks for credits as usual.
+
+### Music made by ElevenLabs
+
+`music.file` plays a sound file the person supplies, and costs nothing. `music.prompt` has ElevenLabs make the music from a description. That spends credits.
+
+```
+--set "music.prompt=slow, quiet organ in an empty chapel"   describe the sound
+--set music.minutes=2                                       how long a piece, 0.5 to 5. It loops
+--set music.take=2                                          another piece from the same words. Costs again
+```
+
+**The music's price is a rough figure.** ElevenLabs does not give the price before it makes music, so the tool counts 900 credits a minute, ElevenLabs' own published rough number. Say so when you ask: "about 1,800 credits for the music, a rough figure". After making it, the tool reads the account's credits before and after and says what it really came to. Pass that on, in its own words.
+
+The piece is made once and kept. The same words, length and take cost nothing the next time.
+
+Describe the sound. Do not name a hymn, a song or an artist: ElevenLabs refuses those, and the tool passes on the words it suggests instead. Do not try a second time without asking.
 
 ### The model, and how the voice speaks
 
@@ -166,8 +183,9 @@ A setup is a small JSON file that holds only what differs from the defaults. The
 - **The window works nothing out.** After every change the editor (`src/lib/stores/editor.svelte.ts`) sends the sparse setup to `setup_look` and shows the plan and the cost that come back.
 - **Sound sets the timing.** Each still is held for as long as its sound lasts. With no voice, the pace settings say how long.
 - **A room is added last.** `audio::master` lays a room's echo over the finished voice track, before any music. `room.rs` works the echo out from a few numbers, and FFmpeg's `afir` applies it. It touches no recording and no timing, so it costs nothing and is in no cache key. With `room.kind = none` the sound is sample for sample what it was.
-- **One gate for credits.** `make::look` is free. `make::make` stops with `NeedsApproval` unless the approved number covers the credits still to spend. That is letters times what each model charges (`Rates` in `speech.rs`, read from the list `speech::models` fetches and keeps for a day). `speech::record` is the second lock: it adds up what ElevenLabs says it charged, and stops before going over the number.
-- **Only `Client::speak` and `Client::converse` spend.** `speak` records one voice, `converse` two voices as one conversation. Every other call to ElevenLabs is a free list or lookup. Both try again only after a "busy" answer, when nothing was recorded. Never retry them after any other failure: a recording may have been made and paid for.
+- **One gate for credits, and one number.** `make::look` is free, and `Look::credits` is the number a person agrees to: the voice and the music together. Everything that spends is in `make::spend`, which stops with `NeedsApproval` unless the approved number covers both. The voice's part is letters times what each model charges (`Rates` in `speech.rs`, read from the list `speech::models` fetches and keeps for a day). `speech::record` is the second lock: it adds up what ElevenLabs says it charged, and stops before going over the number. Music cannot be stopped half way, so it is not started if what the voice really cost plus the music's rough cost would go over.
+- **Only `Client::speak`, `Client::converse` and `Client::compose` spend.** `speak` records one voice, `converse` two voices as one conversation, `compose` makes music. Every other call to ElevenLabs is a free list or lookup. All three try again only after a "busy" answer, when nothing was made. Never retry them after any other failure: something may have been made and paid for.
+- **Nobody knows the price of music beforehand.** ElevenLabs gives no way to ask, and does not say afterwards what it charged. `music.rs` uses its published rough figure (`CREDITS_A_MINUTE`) for the estimate and always calls it rough. Afterwards it reads the account's credits before and after, and reports a cost only when that reading makes sense (`told`). Never show the estimate as what was charged. To ask "is there anything to spend?", look at `Look::credits`, not at letters: a video can cost credits for music alone.
 
 ### What has to stay in step
 
@@ -182,6 +200,8 @@ A setup is a small JSON file that holds only what differs from the defaults. The
 Setups, pictures and recorded speech live outside the repo, in the app's own folder (`%APPDATA%\gg.cathedral.prayer-video-creator` on Windows). The app and `pvc` share it.
 
 Each recording is filed under a hash of the voice, its settings and the exact words (`raw_key` in `speech.rs`). Change what goes into that hash, or one letter of a prayer, and the person pays to record it all again.
+
+Music made by ElevenLabs is kept the same way, in its own folder beside the speech, under a hash of the words, the length, the singing switch and the take (`Piece::key` in `music.rs`, pinned in a test). "Forget all recorded speech" in Settings leaves it alone.
 
 Two voices recorded together (`voice.together`) are one recording, filed under a name of its own shape (`"dialogue"`, both voices, both halves), so it can never be mistaken for a piece by one voice.
 

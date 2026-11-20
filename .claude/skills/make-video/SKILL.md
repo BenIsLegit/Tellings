@@ -53,6 +53,13 @@ One recording came out wrong: `pvc rerecord <setup> [changes] --scene d1b3`, the
 
 To check a look before making the whole video: `pvc frame <setup> --scene d3b10 --to still.png`, then open the picture.
 
+Background music. A file the person supplies is free: `--set music.file="C:\music\chant.mp3"`. Music made by ElevenLabs from a description spends credits, and its price is a rough figure (ElevenLabs does not give the price first), so say "about" and "rough" when you ask. Afterwards the tool says what it really came to. Pass that on:
+
+```
+--set "music.prompt=slow, quiet organ in an empty chapel"   describe the sound. Never name a hymn, a song or an artist
+--set music.minutes=2                                       how long a piece. It loops. About 900 credits a minute
+```
+
 Never ask for the ElevenLabs key in the conversation. If none is saved, the person adds it in the app under Settings or runs `pvc key set` themselves.
 
 The person reads slowly. Keep replies short and plain.

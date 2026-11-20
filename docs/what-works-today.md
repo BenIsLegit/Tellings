@@ -49,9 +49,11 @@ Every setting has a default. The exact names and choices are in [settings.md](se
 - A voice that drops out after the first few Hail Marys of each decade.
 - No voice at all.
 - Background music or chant that you supply.
+- Or background music that ElevenLabs makes from your description, like "slow, quiet organ in an empty chapel". It is made once and kept, and it loops under the video with a gentle join. No singing unless you ask for it.
 - A room for the voice: a chapel, a church or a cathedral. The echo rings on into the pauses. It is added to the finished sound, so it costs no credits and nothing is recorded again.
 - Every recording is made once and kept. Nothing spends credits without a yes that names the number.
 - The number comes from the model's own price, and the making stops before it goes over. Afterwards it says what ElevenLabs really charged.
+- One number covers the voice and the music together. The music's part is a rough figure, about 900 credits a minute, because ElevenLabs does not give the price before it makes music. Afterwards the tool reads your credits before and after and says what the music came to.
 
 **The pictures**
 
@@ -112,6 +114,12 @@ Every setting has a default. The exact names and choices are in [settings.md](se
 - **A real ElevenLabs voice.** The voice path was tested against a stand-in service, not a real account. The first real video is the test. Listen to it before trusting it.
 - **The newer models and controls, with real credits.** The lists (models, prices, voices, credits left) were checked against a real ElevenLabs account. Recording with a different model, a direction, a seed, high quality or a dictionary was checked against the stand-in only. Try one short prayer first and listen. A direction is the least sure: if ElevenLabs ever reads it aloud, take it out.
 - **Two voices recorded together, with real credits.** Checked against the stand-in only. ElevenLabs' pages say Eleven v4 and v3 both take this kind of request, and that waits on a real try. They do not say three things, and each was built to cope either way: whether anything sits between the two voices' words in its timings, whether a direction's letters are timed, and whether it reports what it charged. If the lit-up line ever drifts from the voice on a prayer recorded together, that is where to look. Nothing needs recording again to fix it: what ElevenLabs sent is kept.
+- **Music made by ElevenLabs, with real credits.** Checked against the stand-in only. Nothing was asked of the real service. Not known until a real piece is made:
+  - **The real price.** ElevenLabs' own pages disagree, and none says how one piece is counted. 900 credits a minute is its published rough figure. The first real piece will show what it charges you. Start with half a minute.
+  - **Whether your credits show it at all.** The tool tells what music cost by reading your credits before and after. If ElevenLabs counts music apart from credits, the tool will say your credits did not move, and you will have to look at your usage at elevenlabs.io.
+  - **What a refusal looks like.** ElevenLabs refuses a prompt that names a hymn, a song or an artist, and its pages say it offers other words. Whether "Ave Maria" or "Salve Regina" counts as a song title is not known. Whether a refused prompt is charged is not known either. The tool will tell you if your credits went down.
+  - **How long it takes.** The tool waits up to fifteen minutes for a piece. ElevenLabs' own tools wait four.
+  - **How it sounds, and how the loop sounds.** The join was checked by measuring, not by ear.
 - **How the rooms sound.** They were checked by measuring, not by ear: the echo is there, it fades as fast as each room should, and no timing changes. Listen to one prayer in a room before you make a whole video with it.
 - **How different two takes sound.** ElevenLabs reads the same words a little differently each time it is asked. The stand-in does not, so takes were checked by count, not by ear. Try a few takes of the Hail Mary before paying for more.
 - **macOS and Linux.** Built and tested on Windows only.
