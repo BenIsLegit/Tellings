@@ -44,6 +44,8 @@ On Windows run `.\pvc.bat`. On macOS or Linux run `./pvc`. The first run builds 
 ```
 --mysteries joyful                       joyful | sorrowful | glorious | luminous | today
 --voice "Name"                           a voice in the person's ElevenLabs account
+--voice "Bella + George"                 several voices take turns
+--takes 5                                five recordings of each prayer take turns
 --no-voice                               words on screen only, no credits
 --screen tv-1080p                        see pvc options for the sizes
 --to "C:\some\folder"                    where the files go
@@ -60,12 +62,32 @@ Rules are how the person's main wish works: a different voice (or picture, or pa
 --rule "mystery=1: picture.file=C:\pics\baptism.jpg; picture.credit=Piero della Francesca, The Baptism of Christ, c. 1450"
 ```
 
+### Variety
+
+One recording of the Hail Mary played 53 times sounds stamped out. These settings fix that. They are voice settings, so each works for the whole video or in a rule.
+
+```
+--takes 5                                  five recordings of each prayer take turns
+--set voice.freshEachTime=true             a new recording every time a prayer is said
+--set voice.shuffle=true                   mixed-up order instead of in turn
+--voice "Bella + George"                   the voices take turns, a new one each prayer
+--set voice.turnEvery=decade               ... or one voice for each decade
+--set pace.vary=0.2                        pauses differ by up to 0.2 seconds
+--rule "prayer=hailmary: voice.takes=5; voice.shuffle=true"     only the Hail Marys
+--rule "prayer=hailmary: voice.name=Bella + George + Sarah"     three voices share the Hail Marys
+```
+
+**Variety costs credits.** On a whole rosary, one take is about 2,600 credits, five takes about 5,800, and a new recording every time about 16,300. Each recording is made once and kept. Run `pvc show` again after adding variety, and ask about the new number.
+
+If one recording came out wrong, `pvc rerecord luminous --scene d1b3` throws away what is heard on that bead. Pass the same setup and changes you make the video with. The next `pvc make` records it afresh and asks for credits as usual.
+
 Bead names: `cross`, `p1` to `p5` (the strand, `p1` nearest the cross), `medal`, `d3b10` (decade 3, bead 10), `L2` to `L5` (the big beads in the loop), `g0` to `g5` (the chain, where the Glory Be is said).
 
 ### Useful extras
 
 ```
 pvc frame luminous --scene d3b10 --to still.png   draw one moment as a picture, then look at it
+pvc rerecord luminous --scene d3b10               throw away that bead's recording, to make it afresh
 pvc save "My Joyful" joyful --voice "Bella"       keep a setup under a name
 pvc make my-joyful                                use it again
 pvc voices                                        the voices in the account (free)
@@ -122,6 +144,8 @@ start.bat                     opens the app from this folder
 ```
 
 To see a change to the drawing, use `pvc frame` and look at the picture.
+
+To look at the app's window while the person has their own copy open, start a second copy with `PVC_SECOND_WINDOW=1`, its own `PVC_DATA_DIR`, and its own `WEBVIEW2_USER_DATA_FOLDER`. Without the first, the app only shows the window that is already open. Close your copy when you are done. If they started the app with `start.bat`, it rebuilds and restarts by itself each time you change the code.
 
 To test the voice without spending credits, run the stand-in service, `node dev/stand-in-elevenlabs.mjs` (Windows only). The steps are at the top of that file. Always set `PVC_DATA_DIR` to a scratch folder while you do, so stand-in speech is never kept as if it were the person's real voice. Pass `--to` a scratch folder too, or the test video lands in their Videos folder.
 

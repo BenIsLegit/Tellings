@@ -50,6 +50,8 @@ Open this folder in Claude Code or Codex and say what you want:
 
 > Same as my last one, but a different voice for every Our Father.
 
+> Make the Hail Marys sound less alike. Five takes, mixed up.
+
 It will tell you what it costs in ElevenLabs credits and wait for your yes before it spends anything. Then it tells you where the file is.
 
 ### 2. Use the app

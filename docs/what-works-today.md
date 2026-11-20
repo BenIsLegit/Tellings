@@ -16,6 +16,7 @@ Every setting has a default. The exact names and choices are in [settings.md](se
 - Material: plain outline, wood, glass, stone, pearl, metal, knots of wool. Color and size.
 - Chain or cord, and its color.
 - Which way around the loop you go.
+- A prayer said on the chain lights that stretch of chain, between its two beads. Only a bead gets a ring.
 
 **The prayers**
 
@@ -34,13 +35,17 @@ Every setting has a default. The exact names and choices are in [settings.md](se
 - Any voice in your ElevenLabs account, by name. The tool fetches the sound itself.
 - A different voice at any of the five levels.
 - Two voices that take turns on the Our Father, Hail Mary and Glory Be.
+- Several voices that take turns leading: a new one on every prayer, or one for each decade.
+- Several recordings ("takes") of each prayer that take turns, so repeats sound less alike. Or a new recording every time a prayer is said.
+- In turn, or mixed up.
+- Record one bead again, when a recording came out wrong.
 - Your own recordings in place of a generated voice.
 - Speed. 1 is the pace of the first video.
 - Pauses before and after each prayer.
 - A voice that drops out after the first few Hail Marys of each decade.
 - No voice at all.
 - Background music or chant that you supply.
-- Each prayer is recorded once per voice and kept. Nothing spends credits without a yes that names the number.
+- Every recording is made once and kept. Nothing spends credits without a yes that names the number.
 
 **The pictures**
 
@@ -67,7 +72,7 @@ Every setting has a default. The exact names and choices are in [settings.md](se
 **The pace**
 
 - How long each bead stays up with no voice.
-- The pauses.
+- The pauses, and whether they differ a little from bead to bead.
 - A soft fade or a plain cut between beads.
 - How long the title and the ending last.
 
@@ -84,7 +89,7 @@ Every setting has a default. The exact names and choices are in [settings.md](se
 - Save a setup under a name and use it again.
 - Start from a saved setup or a preset and change one thing.
 - Share a setup as a file.
-- Sixteen presets. The first is the Luminous video as it was made.
+- Seventeen presets. The first is the Luminous video as it was made.
 
 ## Not built yet
 
@@ -99,4 +104,5 @@ Every setting has a default. The exact names and choices are in [settings.md](se
 ## Not checked yet
 
 - **A real ElevenLabs voice.** The voice path was tested against a stand-in service, not a real account. The first real video is the test. Listen to it before trusting it.
+- **How different two takes sound.** ElevenLabs reads the same words a little differently each time it is asked. The stand-in does not, so takes were checked by count, not by ear. Try a few takes of the Hail Mary before paying for more.
 - **macOS and Linux.** Built and tested on Windows only.

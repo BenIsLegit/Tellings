@@ -52,8 +52,12 @@ Can be set for part of the video with a rule.
 | Setting | Choices | What it does |
 | --- | --- | --- |
 | `voice.on` | true \| false | false means no voice: words on screen only, and no credits spent. |
-| `voice.name` | a voice name | The name of a voice in your ElevenLabs account. See: pvc voices. |
-| `voice.id` | a voice id | An exact ElevenLabs voice id. Wins over the name. |
+| `voice.name` | a voice name, or several joined with + | The name of a voice in your ElevenLabs account. See: pvc voices. Several names take turns: Bella + George. |
+| `voice.turnEvery` | prayer \| decade | With several voices: a different one on every prayer, or one voice for each decade. The opening and closing count as a decade each. |
+| `voice.takes` | 1 to 20 | How many different recordings of each prayer take turns. 1 is one recording used every time, as in the first video. More costs more credits, once. |
+| `voice.freshEachTime` | true \| false | A new recording every time a prayer is said, so no two sound the same. Costs the most credits. Wins over takes. |
+| `voice.shuffle` | true \| false | Mix up the order of the takes and the voices, instead of going in turn. The mix is the same each time the video is made. |
+| `voice.id` | a voice id | An exact ElevenLabs voice id. Wins over the name, and leads alone. |
 | `voice.model` | a model id | The ElevenLabs model. Usually left alone. |
 | `voice.speed` | 0.4 to 2.5 | 1 is the pace of the first video. 0.8 is slower, 1.2 is faster. |
 | `voice.exactSpeedup` | 0.5 to 4 | Skip the measuring and speed the recording up by exactly this much. |
@@ -79,6 +83,7 @@ Can be set for part of the video with a rule.
 | `pace.think` | seconds | Extra time to think after the mystery is named. |
 | `pace.secondsPerLine` | seconds | With no voice: how long each line of a prayer stays up. |
 | `pace.minSeconds` | seconds | With no voice: the shortest any bead stays up. |
+| `pace.vary` | seconds | Lets the quiet after each prayer differ from bead to bead, by up to this much either way. 0 keeps every pause the same. |
 | `pace.transition` | fade \| cut | How one bead changes to the next. |
 | `pace.fade` | seconds | Length of the soft fade. |
 | `pace.intro` | seconds | How long the opening title stays up. Whole video only. |
@@ -177,6 +182,7 @@ Rules: one setting for part of the video
     --rule "prayer=ourfather: voice.name=George"
     --rule "section=closing: words.size=1.2"
     --rule "bead=d3b10: voice.name=Sarah"
+    --rule "prayer=hailmary: voice.name=Bella + George; voice.takes=3"
     --rule "mystery=1: picture.file=pictures/baptism.jpg; picture.credit=Piero della Francesca, The Baptism of Christ, c. 1450"
 
   where:

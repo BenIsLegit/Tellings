@@ -24,6 +24,18 @@ Common changes:
 --rule "bead=d3b10: voice.name=Sarah"        one bead
 ```
 
+Variety, so repeated prayers do not all sound alike. It costs more credits, so run `pvc show` again and ask about the new number:
+
+```
+--takes 5                                 five recordings of each prayer take turns
+--voice "Bella + George"                  the voices take turns
+--set voice.freshEachTime=true            a new recording every time (costs the most)
+--set voice.shuffle=true                  mixed-up order
+--rule "prayer=hailmary: voice.takes=5"   only the Hail Marys
+```
+
+One recording came out wrong: `pvc rerecord <setup> [changes] --scene d1b3`, then make the video again.
+
 To check a look before making the whole video: `pvc frame <setup> --scene d3b10 --to still.png`, then open the picture.
 
 Never ask for the ElevenLabs key in the conversation. If none is saved, the person adds it in the app under Settings or runs `pvc key set` themselves.

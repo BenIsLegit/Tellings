@@ -204,7 +204,7 @@ fn cost_lines(est: &speech::Estimate, key: Option<secrets::KeySource>) -> Vec<St
     } else {
         out.push(format!("Credits: about {} to record {} new piece{} of speech.", commas(est.letters_to_record), est.pieces_to_record, if est.pieces_to_record == 1 { "" } else { "s" }));
         for v in &est.by_voice {
-            out.push(format!("  {}: {} letters in {} pieces", v.voice, commas(v.letters), v.pieces));
+            out.push(format!("  {}: {} letters in {} piece{}", v.voice, commas(v.letters), v.pieces, if v.pieces == 1 { "" } else { "s" }));
         }
         if est.letters_kept > 0 {
             out.push(format!("  ({} letters are already recorded and will be reused.)", commas(est.letters_kept)));
