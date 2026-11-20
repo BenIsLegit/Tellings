@@ -86,6 +86,9 @@ pub struct ModelInfo {
     /// True when it reads a tag like `[reverent]` as direction. See `takes_direction`.
     #[serde(default)]
     pub takes_direction: bool,
+    /// True when it can record several voices as one conversation. See `speaks_dialogue`.
+    #[serde(default)]
+    pub speaks_dialogue: bool,
     pub languages: Vec<Language>,
 }
 
@@ -97,6 +100,20 @@ pub fn takes_direction(model: &str) -> bool {
     let number: String = model.strip_prefix("eleven_v").unwrap_or("").chars().take_while(char::is_ascii_digit).collect();
     number.parse::<u32>().is_ok_and(|n| n >= 3)
 }
+
+/// True for the models that can record several voices as one conversation in
+/// a plain request: Eleven v3, v4 and whatever follows them. Their "turbo" and
+/// "conversational" kin only do it over a live connection, which this tool does
+/// not use, so the name has to end at the number. ElevenLabs' list of models
+/// does not say which is which, so this goes by the name.
+pub fn speaks_dialogue(model: &str) -> bool {
+    let number = model.strip_prefix("eleven_v").unwrap_or("");
+    !number.is_empty() && number.chars().all(|c| c.is_ascii_digit()) && number.parse::<u32>().is_ok_and(|n| n >= 3)
+}
+
+/// The most letters one conversation may hold, all its parts together.
+/// ElevenLabs: "keep the total character count ... at or below 2,000".
+pub const DIALOGUE_MAX_LETTERS: u64 = 2000;
 
 /// A pronunciation dictionary kept in the ElevenLabs account.
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
@@ -164,15 +181,70 @@ pub struct SpeechRequest<'a> {
     pub output_format: &'a str,
 }
 
+/// Everything one request for a conversation can say. A conversation takes
+/// fewer settings than one voice does: no style, no speaker boost, no speed.
+#[derive(Clone, Debug, Default)]
+pub struct DialogueRequest<'a> {
+    pub model: &'a str,
+    /// Each part in order, as (voice id, words).
+    pub parts: &'a [(String, String)],
+    pub stability: Option<f32>,
+    pub similarity: Option<f32>,
+    pub clone_strength: Option<f32>,
+    pub seed: Option<u32>,
+    pub language: Option<&'a str>,
+    /// "on" or "off". Left out, ElevenLabs decides.
+    pub normalize: Option<&'a str>,
+    /// Pronunciation dictionaries, as (id, version). Three at most.
+    pub dictionaries: &'a [(String, String)],
+    /// Like "mp3_44100_128". Empty means that one.
+    pub output_format: &'a str,
+}
+
+/// Where one voice speaks in a conversation, as ElevenLabs reports it.
+#[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq)]
+pub struct VoiceSegment {
+    /// Which part of the conversation this is, counting from 0.
+    pub part: usize,
+    /// When it starts and ends, in seconds.
+    pub start: f32,
+    pub end: f32,
+    /// Where it starts and ends among the timed letters. The end is not included.
+    pub first_letter: usize,
+    pub letters_end: usize,
+}
+
 #[derive(Debug)]
 pub struct Spoken {
     /// A sound file, in the format asked for.
     pub audio: Vec<u8>,
     pub alignment: Option<Alignment>,
+    /// The same timings for the text after ElevenLabs spelled out numbers and short forms.
+    pub normalized: Option<Alignment>,
+    /// For a conversation: where each voice speaks. Empty for one voice.
+    pub segments: Vec<VoiceSegment>,
     /// The credits ElevenLabs says it charged, when it says.
     pub cost: Option<u64>,
     /// ElevenLabs' own name for this request.
     pub request_id: Option<String>,
+}
+
+/// 1.1 is held as 1.10000002. Send the number the person chose.
+fn tidy(v: f32) -> Value {
+    json!((v as f64 * 1000.0).round() / 1000.0)
+}
+
+/// Read one set of letter timings out of an answer.
+fn alignment_in(body: &Value, key: &str) -> Option<Alignment> {
+    let times = |name: &str| -> Option<Vec<f32>> { body[key][name].as_array().map(|a| a.iter().map(|v| v.as_f64().unwrap_or(0.0) as f32).collect()) };
+    match (times("character_start_times_seconds"), times("character_end_times_seconds")) {
+        (Some(starts), Some(ends)) if !starts.is_empty() && starts.len() == ends.len() => {
+            let letters: Vec<&str> = body[key]["characters"].as_array().map(|a| a.iter().map(|c| c.as_str().unwrap_or("")).collect()).unwrap_or_default();
+            let one_each = letters.len() == starts.len() && letters.iter().all(|c| c.chars().count() == 1);
+            Some(Alignment { starts, ends, text: if one_each { letters.concat() } else { String::new() } })
+        }
+        _ => None,
+    }
 }
 
 impl Client {
@@ -284,6 +356,7 @@ impl Client {
                 can_use_style: m["can_use_style"] == true,
                 can_use_speaker_boost: m["can_use_speaker_boost"] == true,
                 takes_direction: takes_direction(id),
+                speaks_dialogue: speaks_dialogue(id),
                 languages: languages
                     .iter()
                     .filter_map(|l| Some(Language { id: l["language_id"].as_str()?.to_string(), name: l["name"].as_str().unwrap_or("").to_string() }))
@@ -333,8 +406,6 @@ impl Client {
     /// letter, more or less by the model.
     pub fn speak(&self, req: &SpeechRequest) -> Result<Spoken> {
         let mut body = json!({ "text": req.text, "model_id": req.model });
-        // 1.1 is held as 1.10000002. Send the number the person chose.
-        let tidy = |v: f32| json!((v as f64 * 1000.0).round() / 1000.0);
         let mut settings = serde_json::Map::new();
         if let Some(v) = req.stability {
             settings.insert("stability".into(), tidy(v));
@@ -369,15 +440,54 @@ impl Client {
         if !req.dictionaries.is_empty() {
             body["pronunciation_dictionary_locators"] = req.dictionaries.iter().map(|(id, version)| json!({ "pronunciation_dictionary_id": id, "version_id": version })).collect();
         }
-        let format = if req.output_format.is_empty() { MP3 } else { req.output_format };
         let url = format!("{}/v1/text-to-speech/{}/with-timestamps", self.base, req.voice_id);
+        self.ask_for_sound(&url, req.output_format, &body)
+    }
+
+    /// Record several voices as one conversation: each part in its own voice,
+    /// each following on from the one before. This spends credits, as `speak` does.
+    pub fn converse(&self, req: &DialogueRequest) -> Result<Spoken> {
+        let inputs: Vec<Value> = req.parts.iter().map(|(voice_id, words)| json!({ "text": words, "voice_id": voice_id })).collect();
+        let mut body = json!({ "inputs": inputs, "model_id": req.model });
+        let mut settings = serde_json::Map::new();
+        if let Some(v) = req.stability {
+            settings.insert("stability".into(), tidy(v));
+        }
+        if let Some(v) = req.similarity {
+            settings.insert("similarity".into(), tidy(v));
+        }
+        if let Some(v) = req.clone_strength {
+            settings.insert("clone_strength".into(), tidy(v));
+        }
+        if !settings.is_empty() {
+            body["settings"] = Value::Object(settings);
+        }
+        if let Some(v) = req.seed {
+            body["seed"] = json!(v);
+        }
+        if let Some(v) = req.language {
+            body["language_code"] = json!(v);
+        }
+        if let Some(v) = req.normalize {
+            body["apply_text_normalization"] = json!(v);
+        }
+        if !req.dictionaries.is_empty() {
+            body["pronunciation_dictionary_locators"] = req.dictionaries.iter().map(|(id, version)| json!({ "pronunciation_dictionary_id": id, "version_id": version })).collect();
+        }
+        let url = format!("{}/v1/text-to-dialogue/with-timestamps", self.base);
+        self.ask_for_sound(&url, req.output_format, &body)
+    }
+
+    /// Send a request that records, and read the sound, the timings and the cost out of the answer.
+    fn ask_for_sound(&self, url: &str, output_format: &str, body: &Value) -> Result<Spoken> {
+        let format = if output_format.is_empty() { MP3 } else { output_format };
 
         // "Busy" means ElevenLabs turned the request away: nothing was recorded
         // and nothing was charged, so asking again is safe. Any other failure is
         // not tried again, because a recording may have been made and paid for.
         let mut waits = self.waits.iter();
         let resp = loop {
-            let resp = self.http.post(&url).header("xi-api-key", &self.key).query(&[("output_format", format)]).json(&body).send()?;
+            let resp = self.http.post(url).header("xi-api-key", &self.key).query(&[("output_format", format)]).json(body).send()?;
             match waits.next() {
                 Some(wait) if resp.status().as_u16() == 429 => std::thread::sleep(*wait),
                 _ => break resp,
@@ -391,16 +501,18 @@ impl Client {
         let body: Value = resp.json()?;
         let audio = body["audio_base64"].as_str().ok_or_else(|| Error::voice("ElevenLabs answered without any sound."))?;
         let audio = base64::engine::general_purpose::STANDARD.decode(audio).map_err(|e| Error::voice(format!("The sound from ElevenLabs was damaged: {e}")))?;
-        let times = |key: &str| -> Option<Vec<f32>> { body["alignment"][key].as_array().map(|a| a.iter().map(|v| v.as_f64().unwrap_or(0.0) as f32).collect()) };
-        let alignment = match (times("character_start_times_seconds"), times("character_end_times_seconds")) {
-            (Some(starts), Some(ends)) if !starts.is_empty() && starts.len() == ends.len() => {
-                let letters: Vec<&str> = body["alignment"]["characters"].as_array().map(|a| a.iter().map(|c| c.as_str().unwrap_or("")).collect()).unwrap_or_default();
-                let one_each = letters.len() == starts.len() && letters.iter().all(|c| c.chars().count() == 1);
-                Some(Alignment { starts, ends, text: if one_each { letters.concat() } else { String::new() } })
-            }
-            _ => None,
+        // A segment that is not shaped as expected is left out. The timing copes without it.
+        let segment = |s: &Value| -> Option<VoiceSegment> {
+            Some(VoiceSegment {
+                part: s["dialogue_input_index"].as_u64()? as usize,
+                start: s["start_time_seconds"].as_f64()? as f32,
+                end: s["end_time_seconds"].as_f64()? as f32,
+                first_letter: s["character_start_index"].as_u64()? as usize,
+                letters_end: s["character_end_index"].as_u64()? as usize,
+            })
         };
-        Ok(Spoken { audio, alignment, cost, request_id })
+        let segments = body["voice_segments"].as_array().map(|list| list.iter().filter_map(segment).collect()).unwrap_or_default();
+        Ok(Spoken { audio, alignment: alignment_in(&body, "alignment"), normalized: alignment_in(&body, "normalized_alignment"), segments, cost, request_id })
     }
 }
 
@@ -472,6 +584,7 @@ mod tests {
         assert_eq!(models[0].languages.len(), 2);
         assert_eq!((models[0].credits_per_letter, models[1].credits_per_letter), (1.0, 0.5));
         assert!(models[0].takes_direction && !models[1].takes_direction);
+        assert!(models[0].speaks_dialogue && !models[1].speaks_dialogue);
     }
 
     #[test]
@@ -537,6 +650,85 @@ mod tests {
         m.assert();
         // No timings and no cost were sent back, and that is not an error.
         assert!(spoken.alignment.is_none() && spoken.cost.is_none());
+    }
+
+    #[test]
+    fn two_voices_are_recorded_as_one_conversation() {
+        let mut server = mockito::Server::new();
+        let m = server
+            .mock("POST", "/v1/text-to-dialogue/with-timestamps")
+            .match_query(mockito::Matcher::UrlEncoded("output_format".into(), "mp3_44100_192".into()))
+            .match_header("xi-api-key", "test-key")
+            // A conversation takes "similarity", not "similarity_boost", and has no style, boost or speed.
+            .match_body(mockito::Matcher::Json(json!({
+                "inputs": [{ "text": "Hail Mary,", "voice_id": "lead" }, { "text": "Holy Mary,", "voice_id": "answer" }],
+                "model_id": "eleven_v4",
+                "settings": { "stability": 0.35, "similarity": 0.8, "clone_strength": 0.5 },
+                "seed": 7,
+                "language_code": "en",
+                "apply_text_normalization": "off",
+                "pronunciation_dictionary_locators": [{ "pronunciation_dictionary_id": "d1", "version_id": "v9" }],
+            })))
+            .with_header("character-cost", "20")
+            .with_header("request-id", "req-2")
+            .with_body(
+                r#"{"audio_base64":"AAEC",
+                "alignment":{"characters":["H","i","Y","o"],"character_start_times_seconds":[0,0.1,0.5,0.6],"character_end_times_seconds":[0.1,0.2,0.6,0.7]},
+                "normalized_alignment":{"characters":["H","i"," ","Y","o"],"character_start_times_seconds":[0,0.1,0.2,0.5,0.6],"character_end_times_seconds":[0.1,0.2,0.5,0.6,0.7]},
+                "voice_segments":[
+                    {"voice_id":"lead","start_time_seconds":0,"end_time_seconds":0.2,"character_start_index":0,"character_end_index":2,"dialogue_input_index":0},
+                    {"voice_id":"answer","start_time_seconds":0.5,"end_time_seconds":0.7,"character_start_index":2,"character_end_index":4,"dialogue_input_index":1},
+                    {"voice_id":"answer","oddly":"shaped"}
+                ]}"#,
+            )
+            .create();
+        let client = Client::with_base("test-key", &server.url()).unwrap();
+        let parts = [("lead".to_string(), "Hail Mary,".to_string()), ("answer".to_string(), "Holy Mary,".to_string())];
+        let dictionaries = [("d1".to_string(), "v9".to_string())];
+        let spoken = client
+            .converse(&DialogueRequest {
+                model: "eleven_v4",
+                parts: &parts,
+                stability: Some(0.35),
+                similarity: Some(0.8),
+                clone_strength: Some(0.5),
+                seed: Some(7),
+                language: Some("en"),
+                normalize: Some("off"),
+                dictionaries: &dictionaries,
+                output_format: "mp3_44100_192",
+            })
+            .unwrap();
+        m.assert();
+        assert_eq!((spoken.audio.as_slice(), spoken.cost, spoken.request_id.as_deref()), ([0u8, 1, 2].as_slice(), Some(20), Some("req-2")));
+        assert_eq!(spoken.alignment.unwrap().text, "HiYo");
+        assert_eq!(spoken.normalized.unwrap().text, "Hi Yo");
+        // Where each voice speaks. The one that was oddly shaped is left out.
+        assert_eq!(
+            spoken.segments,
+            [VoiceSegment { part: 0, start: 0.0, end: 0.2, first_letter: 0, letters_end: 2 }, VoiceSegment { part: 1, start: 0.5, end: 0.7, first_letter: 2, letters_end: 4 }]
+        );
+
+        // With nothing chosen, nothing is sent but the words, the voices and the model.
+        let plain = server
+            .mock("POST", "/v1/text-to-dialogue/with-timestamps")
+            .match_query(mockito::Matcher::UrlEncoded("output_format".into(), "mp3_44100_128".into()))
+            .match_body(mockito::Matcher::Json(json!({ "inputs": [{ "text": "A", "voice_id": "x" }, { "text": "B", "voice_id": "y" }], "model_id": "eleven_v3" })))
+            .with_body(r#"{"audio_base64":"AAEC"}"#)
+            .create();
+        let parts = [("x".to_string(), "A".to_string()), ("y".to_string(), "B".to_string())];
+        let spoken = client.converse(&DialogueRequest { model: "eleven_v3", parts: &parts, ..Default::default() }).unwrap();
+        plain.assert();
+        assert!(spoken.alignment.is_none() && spoken.segments.is_empty() && spoken.cost.is_none());
+    }
+
+    #[test]
+    fn which_models_can_record_a_conversation() {
+        assert!(speaks_dialogue("eleven_v3") && speaks_dialogue("eleven_v4") && speaks_dialogue("eleven_v12"));
+        // Their quick kin only do it over a live connection, and the older models not at all.
+        for model in ["eleven_v4_turbo", "eleven_v3_conversational", "eleven_multilingual_v2", "eleven_flash_v2_5", "eleven_turbo_v2", "eleven_v2", "eleven_v", ""] {
+            assert!(!speaks_dialogue(model), "{model}");
+        }
     }
 
     #[test]

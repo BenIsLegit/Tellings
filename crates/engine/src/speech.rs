@@ -6,6 +6,10 @@
 //! A setup can ask for more than one recording of a prayer ("takes"), so the
 //! repeats do not all sound alike. Each take is recorded once and kept too.
 //!
+//! With a second voice that answers, a setup can ask for the two to be recorded
+//! together: one request, one piece, both voices in it. That piece is kept for
+//! that pair of voices and reused like any other.
+//!
 //! The work happens in four steps, and only the third one spends credits:
 //!
 //! 1. `script`   — list every piece of speech the plan needs, without repeats
@@ -16,7 +20,7 @@
 //! What a piece costs depends on the model: most charge one credit a letter,
 //! the fast ones half. `Rates` holds what ElevenLabs last said each one charges.
 
-use crate::elevenlabs::{takes_direction, Alignment, Client, DictionaryInfo, ModelInfo, OwnSettings, SpeechRequest, VoiceInfo, MP3};
+use crate::elevenlabs::{speaks_dialogue, takes_direction, Alignment, Client, DialogueRequest, DictionaryInfo, ModelInfo, OwnSettings, SpeechRequest, VoiceInfo, VoiceSegment, DIALOGUE_MAX_LETTERS, MP3};
 use crate::error::{Error, Result};
 use crate::paths::Paths;
 use crate::plan::{find_file, Plan, SceneKind, FIRST_VIDEO_PACE};
@@ -102,12 +106,19 @@ impl VoiceRef {
     /// can be built with objects that order their keys differently, and the
     /// two must file a recording under the same name.
     fn extras(&self) -> Vec<serde_json::Value> {
+        self.extras_for(false)
+    }
+
+    /// The same, for a piece of one voice or for two voices recorded together.
+    /// Together they take no speaker boost and no speed, so those two change
+    /// nothing there and are left out of the name.
+    fn extras_for(&self, together: bool) -> Vec<serde_json::Value> {
         let mut list = Vec::new();
         let mut add = |name: &str, value: serde_json::Value| list.extend([json!(name), value]);
-        if let Some(v) = self.speaker_boost {
+        if let Some(v) = self.speaker_boost.filter(|_| !together) {
             add("speakerBoost", json!(v));
         }
-        if let Some(v) = self.model_speed {
+        if let Some(v) = self.model_speed.filter(|_| !together) {
             add("modelSpeed", json!(v));
         }
         if let Some(v) = self.clone_strength {
@@ -159,8 +170,77 @@ impl VoiceRef {
 pub enum Source {
     /// Speech made by ElevenLabs.
     Speech { voice: VoiceRef, text: String },
+    /// Two voices in one recording, made by ElevenLabs as one conversation: the
+    /// leader says the first lines and the second voice answers with the rest.
+    Together {
+        voice: VoiceRef,
+        second: VoiceRef,
+        /// The leader's words, as they are sent.
+        first: String,
+        /// The answer, as it is sent.
+        answer: String,
+        /// The line the answer starts on.
+        answer_from: usize,
+    },
     /// A sound file the person supplied.
     Recording { file: PathBuf },
+}
+
+impl Source {
+    /// The voice that leads a piece ElevenLabs makes. None for the person's own sound file.
+    fn lead(&self) -> Option<&VoiceRef> {
+        match self {
+            Source::Speech { voice, .. } | Source::Together { voice, .. } => Some(voice),
+            Source::Recording { .. } => None,
+        }
+    }
+
+    /// Every letter sent to ElevenLabs for this piece. It is what the piece is charged by.
+    fn sent_letters(&self) -> u64 {
+        match self {
+            Source::Speech { text, .. } => letters(text),
+            Source::Together { first, answer, .. } => letters(first) + letters(answer),
+            Source::Recording { .. } => 0,
+        }
+    }
+
+    /// How the words sent begin, for pointing at a piece in a message.
+    fn opening(&self) -> String {
+        match self {
+            Source::Speech { text, .. } => text.chars().take(60).collect(),
+            Source::Together { first, .. } => first.chars().take(60).collect(),
+            Source::Recording { .. } => String::new(),
+        }
+    }
+
+    /// Who is heard, in plain words. Two voices recorded together are "Ann with
+    /// Ben": "Ann + Ben" already means two voices that take turns.
+    fn label(&self) -> String {
+        match self {
+            Source::Speech { voice, .. } => voice.label(),
+            Source::Together { voice, second, .. } => format!("{} with {}", voice.label(), second.label()),
+            Source::Recording { file } => file.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default(),
+        }
+    }
+
+    /// Everything that makes this piece sound as it does, apart from which take it is.
+    fn sound(&self) -> String {
+        match self {
+            Source::Speech { voice, text } => format!("S|{}|{text}", sound_of(voice)),
+            Source::Together { voice, second, first, answer, .. } => format!("T|{}|{first}|{answer}", pair_sound(voice, second)),
+            Source::Recording { file } => format!("R|{}", file.display()),
+        }
+    }
+
+    /// What a voice's own pace is measured across. None for the person's own sound file.
+    fn pace(&self) -> Option<String> {
+        match self {
+            Source::Speech { voice, .. } => Some(pace_of(voice)),
+            // Two voices together keep their own measure: they speak as a pair.
+            Source::Together { voice, second, .. } => Some(format!("{}|with|{}|{}", voice.tag(), second.tag(), voice.model)),
+            Source::Recording { .. } => None,
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -206,6 +286,9 @@ pub struct Script {
     pub scenes: Vec<Vec<Part>>,
     /// Recordings named in the setup that could not be found.
     pub missing: Vec<String>,
+    /// Models that were asked to record two voices together and cannot. There
+    /// the two halves are recorded one after the other, and the person is told.
+    pub cannot_together: Vec<String>,
 }
 
 struct Builder<'a> {
@@ -219,10 +302,7 @@ struct Builder<'a> {
 impl Builder<'_> {
     /// Add a piece, or find the one already there that sounds the same.
     fn add(&mut self, spec: ClipSpec) -> usize {
-        let key = match &spec.source {
-            Source::Speech { voice, text } => format!("S|{}|{:?}|{}|{text}", sound_of(voice), spec.speed, spec.take),
-            Source::Recording { file } => format!("R|{}|{:?}", file.display(), spec.speed),
-        };
+        let key = format!("{}|{:?}|{}", spec.source.sound(), spec.speed, spec.take);
         if let Some(i) = self.index.get(&key) {
             return *i;
         }
@@ -235,12 +315,26 @@ impl Builder<'_> {
     /// `silent` is true where the voice has dropped out and the piece only keeps time.
     fn speech(&mut self, voice: VoiceRef, lines: &[String], speed: Speed, how: &Voice, silent: bool) -> usize {
         let text = voice.sent(&lines.join(" "));
-        let ways = if how.fresh_each_time { "fresh".to_string() } else { format!("{}{}", how.takes.max(1), if how.shuffle { " mixed" } else { "" }) };
-        let key = format!("{ways}|{}|{text}", sound_of(&voice));
+        let take = self.take(format!("{}|{}|{text}", ways(how), sound_of(&voice)), how, silent);
+        self.add(ClipSpec { source: Source::Speech { voice, text }, speed, lines: lines.to_vec(), take })
+    }
+
+    /// Two voices in one piece: `lead` says the lines before `answer_from`, and
+    /// `second` answers with the rest. Takes go round as they do for one voice.
+    fn together(&mut self, lead: VoiceRef, second: VoiceRef, lines: &[String], answer_from: usize, speed: Speed, how: &Voice, silent: bool) -> usize {
+        // A direction goes in front of each voice's words, since each is its own part of the request.
+        let first = lead.sent(&lines[..answer_from].join(" "));
+        let answer = second.sent(&lines[answer_from..].join(" "));
+        let source = Source::Together { voice: lead, second, first, answer, answer_from };
+        let take = self.take(format!("{}|{}", ways(how), source.sound()), how, silent);
+        self.add(ClipSpec { source, speed, lines: lines.to_vec(), take })
+    }
+
+    /// Which take of a piece comes next. `key` names the piece and how its takes go round.
+    fn take(&mut self, key: String, how: &Voice, silent: bool) -> u32 {
         let turns = self.takes.entry(key.clone()).or_insert_with(|| if how.fresh_each_time { Turns::endless() } else { Turns::new(how.takes, how.shuffle, &key) });
         // A silent piece reuses a take that is already needed. Nobody should pay for a recording nobody hears.
-        let take = 1 + if silent { turns.again() } else { turns.next() };
-        self.add(ClipSpec { source: Source::Speech { voice, text }, speed, lines: lines.to_vec(), take })
+        1 + if silent { turns.again() } else { turns.next() }
     }
 
     fn recording(&mut self, name: &str, lines: &[String], speed: f32) -> Option<usize> {
@@ -254,6 +348,24 @@ impl Builder<'_> {
             }
         }
     }
+}
+
+/// How a scene's takes go round: how many there are, and whether they are mixed up.
+fn ways(how: &Voice) -> String {
+    if how.fresh_each_time {
+        "fresh".to_string()
+    } else {
+        format!("{}{}", how.takes.max(1), if how.shuffle { " mixed" } else { "" })
+    }
+}
+
+/// Everything about a pair of voices that changes how a prayer they record
+/// together sounds. Style, speaker boost and the model's own speed are not in
+/// it: a conversation takes none of them.
+fn pair_sound(voice: &VoiceRef, second: &VoiceRef) -> String {
+    let extras = voice.extras_for(true);
+    let extras = if extras.is_empty() { String::new() } else { format!("|{}", serde_json::Value::Array(extras)) };
+    format!("{}|{}|{}|{:?}|{:?}{extras}", voice.tag(), second.tag(), voice.model, voice.stability, voice.similarity)
 }
 
 /// Everything about a voice that changes how its recordings sound.
@@ -299,10 +411,20 @@ pub fn script(plan: &Plan, search: &[PathBuf]) -> Script {
                         parts.push(Part { clip, kind: PartKind::Prayer, first_line: 0 });
                     }
                 } else if let (Some(second), Some(k)) = (named(&v.respond), split) {
-                    let clip = b.speech(lead.clone(), &scene.lines[..k], speed, v, scene.muted);
-                    parts.push(Part { clip, kind: PartKind::Prayer, first_line: 0 });
-                    let clip = b.speech(VoiceRef { name: second, id: None, ..lead.clone() }, &scene.lines[k..], speed, v, scene.muted);
-                    parts.push(Part { clip, kind: PartKind::Prayer, first_line: k });
+                    let second = VoiceRef { name: second, id: None, ..lead.clone() };
+                    if v.together && speaks_dialogue(&lead.model) {
+                        // One recording of the whole prayer, with both voices in it.
+                        let clip = b.together(lead.clone(), second, &scene.lines, k, speed, v, scene.muted);
+                        parts.push(Part { clip, kind: PartKind::Prayer, first_line: 0 });
+                    } else {
+                        if v.together && !b.out.cannot_together.contains(&lead.model) {
+                            b.out.cannot_together.push(lead.model.clone());
+                        }
+                        let clip = b.speech(lead.clone(), &scene.lines[..k], speed, v, scene.muted);
+                        parts.push(Part { clip, kind: PartKind::Prayer, first_line: 0 });
+                        let clip = b.speech(second, &scene.lines[k..], speed, v, scene.muted);
+                        parts.push(Part { clip, kind: PartKind::Prayer, first_line: k });
+                    }
                 } else {
                     let clip = b.speech(lead.clone(), &scene.lines, speed, v, scene.muted);
                     parts.push(Part { clip, kind: PartKind::Prayer, first_line: 0 });
@@ -343,6 +465,21 @@ impl ClipSpec {
                 }
                 hash(&serde_json::Value::Array(parts))
             }
+            // Two voices together are filed under a name of their own shape, so
+            // it can never be the name of a piece by one voice. A plain list in
+            // a fixed order, like the one above, and for the same reason.
+            Source::Together { voice, second, first, answer, .. } => {
+                let mut parts = vec![json!("dialogue"), json!(1), json!(voice.tag()), json!(second.tag()), json!(voice.model), json!(voice.stability), json!(voice.similarity), json!(first), json!(answer)];
+                if self.take > 1 {
+                    parts.extend([json!("take"), json!(self.take)]);
+                }
+                let extras = voice.extras_for(true);
+                if !extras.is_empty() {
+                    parts.push(json!("with"));
+                    parts.extend(extras);
+                }
+                hash(&serde_json::Value::Array(parts))
+            }
             Source::Recording { file } => {
                 let meta = std::fs::metadata(file).ok();
                 let len = meta.as_ref().map(|m| m.len()).unwrap_or(0);
@@ -361,6 +498,20 @@ struct SpeechMeta {
     model: String,
     text: String,
     alignment: Option<Alignment>,
+    /// For two voices recorded together: the second voice, and its words.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    second_voice: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    second_voice_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    answer: Option<String>,
+    /// And where each of them speaks, as ElevenLabs reported it, with its
+    /// second set of timings. All of it is kept so the timing of the lines can
+    /// be worked out afresh one day without paying for the recording again.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    segments: Vec<VoiceSegment>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    normalized: Option<Alignment>,
     /// The credits ElevenLabs said it charged for this piece.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     cost: Option<u64>,
@@ -394,7 +545,14 @@ fn is_young(file: &Path) -> bool {
 
 /// The list as last fetched, however old. Reads the disk only.
 fn kept_models(paths: &Paths) -> Option<Vec<ModelInfo>> {
-    std::fs::read_to_string(paths.models_file()).ok().and_then(|t| serde_json::from_str(&t).ok())
+    let mut list: Vec<ModelInfo> = std::fs::read_to_string(paths.models_file()).ok().and_then(|t| serde_json::from_str(&t).ok())?;
+    // What a model can do is told from its name. Work it out afresh, so a list
+    // kept before the tool knew to ask is still right.
+    for model in &mut list {
+        model.takes_direction = takes_direction(&model.id);
+        model.speaks_dialogue = speaks_dialogue(&model.id);
+    }
+    Some(list)
 }
 
 /// What each model charges for a letter, from the list ElevenLabs gave last
@@ -478,8 +636,8 @@ pub fn estimate(paths: &Paths, script: &Script) -> Estimate {
     let mut by_voice: BTreeMap<String, VoiceCost> = BTreeMap::new();
     let mut models: BTreeSet<String> = BTreeSet::new();
     for clip in &script.clips {
-        let Source::Speech { voice, text } = &clip.source else { continue };
-        let n = letters(text);
+        let Some(voice) = clip.source.lead() else { continue };
+        let n = clip.source.sent_letters();
         if is_kept(paths, clip) {
             est.letters_kept += n;
         } else {
@@ -489,7 +647,7 @@ pub fn estimate(paths: &Paths, script: &Script) -> Estimate {
             est.pieces_to_record += 1;
             est.rates_guessed |= rates.model(&voice.model).is_none();
             models.insert(voice.model.clone());
-            let cost = by_voice.entry(voice.label()).or_insert_with(|| VoiceCost { voice: voice.label(), ..Default::default() });
+            let cost = by_voice.entry(clip.source.label()).or_insert_with(|| VoiceCost { voice: clip.source.label(), ..Default::default() });
             cost.letters += n;
             cost.credits += credits;
             cost.pieces += 1;
@@ -512,8 +670,14 @@ pub fn notes(paths: &Paths, script: &Script) -> Vec<String> {
             out.push(note);
         }
     };
+    for model in &script.cannot_together {
+        let name = rates.model(model).map(|m| m.name.as_str()).unwrap_or(model);
+        say(format!("Two voices can only be recorded together by Eleven v4 or Eleven v3. With {name}, the two halves are recorded one after the other, as before."));
+    }
     for clip in &script.clips {
-        let Source::Speech { voice, .. } = &clip.source else { continue };
+        let Some(voice) = clip.source.lead() else { continue };
+        // Two voices together take no style and no speaker boost, so there is nothing to warn of.
+        let one_voice = matches!(clip.source, Source::Speech { .. });
         let model = &voice.model;
         if voice.direction.is_some() && !takes_direction(model) {
             let name = rates.model(model).map(|m| m.name.as_str()).unwrap_or(model);
@@ -525,10 +689,10 @@ pub fn notes(paths: &Paths, script: &Script) -> Vec<String> {
             }
             continue;
         };
-        if voice.style.is_some() && !info.can_use_style {
+        if one_voice && voice.style.is_some() && !info.can_use_style {
             say(format!("{} does not use the style setting. Put it back, or ElevenLabs may refuse it.", info.name));
         }
-        if voice.speaker_boost.is_some() && !info.can_use_speaker_boost {
+        if one_voice && voice.speaker_boost.is_some() && !info.can_use_speaker_boost {
             say(format!("{} does not use speaker boost. Put it back, or ElevenLabs may refuse it.", info.name));
         }
     }
@@ -567,10 +731,7 @@ pub fn heard(paths: &Paths, script: &Script) -> Vec<Vec<Heard>> {
         uses[part.clip] += 1;
     }
     let mut takes: HashMap<String, BTreeSet<u32>> = HashMap::new();
-    let same_words = |c: &ClipSpec| match &c.source {
-        Source::Speech { voice, text } => format!("{}|{text}", sound_of(voice)),
-        Source::Recording { file } => file.display().to_string(),
-    };
+    let same_words = |c: &ClipSpec| c.source.sound();
     for clip in &script.clips {
         takes.entry(same_words(clip)).or_default().insert(clip.take);
     }
@@ -582,9 +743,10 @@ pub fn heard(paths: &Paths, script: &Script) -> Vec<Vec<Heard>> {
                 .iter()
                 .map(|part| {
                     let clip = &script.clips[part.clip];
-                    let (voice, own_recording, letters, model, kept) = match &clip.source {
-                        Source::Speech { voice, text } => (voice.label(), false, letters(text), voice.model.clone(), is_kept(paths, clip)),
-                        Source::Recording { file } => (file.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default(), true, 0, String::new(), true),
+                    let voice = clip.source.label();
+                    let (own_recording, letters, model, kept) = match clip.source.lead() {
+                        Some(lead) => (false, clip.source.sent_letters(), lead.model.clone(), is_kept(paths, clip)),
+                        None => (true, 0, String::new(), true),
                     };
                     let credits = if own_recording { 0 } else { rates.cost(&model, letters) };
                     Heard { part: part.kind, voice, own_recording, take: clip.take, letters, credits, model, kept, uses: uses[part.clip], takes: takes[&same_words(clip)].len() as u32 }
@@ -613,7 +775,7 @@ pub fn forget(paths: &Paths, script: &Script, scene: usize) -> Result<Forgotten>
     let mut done: BTreeSet<usize> = BTreeSet::new();
     for part in script.scenes.get(scene).map(Vec::as_slice).unwrap_or(&[]) {
         let clip = &script.clips[part.clip];
-        let Source::Speech { voice, text } = &clip.source else { continue };
+        let Some(voice) = clip.source.lead() else { continue };
         if !done.insert(part.clip) {
             continue;
         }
@@ -634,9 +796,9 @@ pub fn forget(paths: &Paths, script: &Script, scene: usize) -> Result<Forgotten>
             }
         }
         out.pieces += 1;
-        out.letters += letters(text);
-        out.credits += rates.cost(&voice.model, letters(text));
-        log::warn!("a kept recording by voice \"{}\" (take {}) was thrown away at the person's request", voice.label(), clip.take);
+        out.letters += clip.source.sent_letters();
+        out.credits += rates.cost(&voice.model, clip.source.sent_letters());
+        log::warn!("a kept recording by voice \"{}\" (take {}) was thrown away at the person's request", clip.source.label(), clip.take);
     }
     Ok(out)
 }
@@ -717,28 +879,39 @@ pub struct Recorded {
 /// `on_done(i, n)` is called after each piece; return false from it to stop.
 pub fn record(paths: &Paths, client: &Client, script: &Script, limit: Option<u64>, mut on_done: impl FnMut(usize, usize) -> bool) -> Result<Recorded> {
     std::fs::create_dir_all(paths.speech())?;
-    let todo: Vec<&ClipSpec> = script.clips.iter().filter(|c| matches!(c.source, Source::Speech { .. }) && !is_kept(paths, c)).collect();
+    let todo: Vec<&ClipSpec> = script.clips.iter().filter(|c| c.source.lead().is_some() && !is_kept(paths, c)).collect();
     let rates = Rates::kept(paths);
 
     // Everything that can be checked for free is checked before the first credit is spent.
     let mut known: Option<Vec<VoiceInfo>> = None;
     let mut dictionaries: Option<Vec<DictionaryInfo>> = None;
     for clip in &todo {
-        let Source::Speech { voice, text } = &clip.source else { continue };
+        let Some(voice) = clip.source.lead() else { continue };
+        let n = clip.source.sent_letters();
         voice_id(paths, client, voice, &mut known)?;
+        if let Source::Together { second, .. } = &clip.source {
+            voice_id(paths, client, second, &mut known)?;
+            // Not quietly recorded as two halves instead: that would change the cost behind the person's back.
+            if n > DIALOGUE_MAX_LETTERS {
+                return Err(Error::voice(format!(
+                    "Two voices recorded together can hold {DIALOGUE_MAX_LETTERS} letters at most in one go, and one prayer here has {n}. \
+                     Turn off recording the two together (voice.together) for that prayer, and its halves are recorded one after the other. It starts: \"{}…\"",
+                    clip.source.opening()
+                )));
+            }
+        }
         if !voice.dictionaries.is_empty() {
             if dictionaries.is_none() {
                 dictionaries = Some(client.dictionaries()?);
             }
             dictionary_ids(&voice.dictionaries, dictionaries.as_deref().unwrap_or(&[]))?;
         }
-        if let Some(model) = rates.model(&voice.model).filter(|m| m.max_letters > 0 && letters(text) > m.max_letters) {
+        if let Some(model) = rates.model(&voice.model).filter(|m| m.max_letters > 0 && n > m.max_letters) {
             return Err(Error::voice(format!(
-                "One piece of speech is {} letters long, and {} takes {} at most. Pick another model for it, or split the text. It starts: \"{}…\"",
-                letters(text),
+                "One piece of speech is {n} letters long, and {} takes {} at most. Pick another model for it, or split the text. It starts: \"{}…\"",
                 model.name,
                 model.max_letters,
-                text.chars().take(60).collect::<String>()
+                clip.source.opening()
             )));
         }
     }
@@ -747,8 +920,9 @@ pub fn record(paths: &Paths, client: &Client, script: &Script, limit: Option<u64
     // What the pieces recorded so far were expected to cost, to tell a small limit from a wrong guess.
     let mut planned = 0u64;
     for (i, clip) in todo.iter().enumerate() {
-        let Source::Speech { voice, text } = &clip.source else { continue };
-        let expected = rates.cost(&voice.model, letters(text));
+        let Some(voice) = clip.source.lead() else { continue };
+        let n = clip.source.sent_letters();
+        let expected = rates.cost(&voice.model, n);
         if let Some(limit) = limit.filter(|limit| done.credits + expected > *limit) {
             return Err(Error::NeedsApproval(format!(
                 "Stopped before going over the {limit} credits agreed to. {} of {} pieces are recorded and kept, for {} credits.{}",
@@ -761,38 +935,72 @@ pub fn record(paths: &Paths, client: &Client, script: &Script, limit: Option<u64
         planned += expected;
         let id = voice_id(paths, client, voice, &mut known)?;
         let locators = dictionary_ids(&voice.dictionaries, dictionaries.as_deref().unwrap_or(&[]))?;
-        let spoken = client.speak(&SpeechRequest {
-            voice_id: &id,
-            model: &voice.model,
-            text,
-            stability: voice.stability,
-            similarity: voice.similarity,
-            style: voice.style,
-            speaker_boost: voice.speaker_boost,
-            speed: voice.model_speed,
-            clone_strength: voice.clone_strength,
-            // Each take gets its own number. The same one would ask for the same recording again.
-            seed: voice.seed.map(|seed| seed.wrapping_add(clip.take.saturating_sub(1))),
-            language: voice.language.as_deref(),
-            normalize: match voice.normalize {
-                Normalize::Auto => None,
-                Normalize::On => Some("on"),
-                Normalize::Off => Some("off"),
-            },
-            dictionaries: &locators,
-            output_format: voice.output_format(),
-        })?;
+        // Each take gets its own number. The same one would ask for the same recording again.
+        let seed = voice.seed.map(|seed| seed.wrapping_add(clip.take.saturating_sub(1)));
+        let normalize = match voice.normalize {
+            Normalize::Auto => None,
+            Normalize::On => Some("on"),
+            Normalize::Off => Some("off"),
+        };
+        let mut meta = SpeechMeta { voice: voice.label(), voice_id: id.clone(), model: voice.model.clone(), ..Default::default() };
+        let spoken = match &clip.source {
+            Source::Speech { text, .. } => {
+                meta.text = text.clone();
+                client.speak(&SpeechRequest {
+                    voice_id: &id,
+                    model: &voice.model,
+                    text,
+                    stability: voice.stability,
+                    similarity: voice.similarity,
+                    style: voice.style,
+                    speaker_boost: voice.speaker_boost,
+                    speed: voice.model_speed,
+                    clone_strength: voice.clone_strength,
+                    seed,
+                    language: voice.language.as_deref(),
+                    normalize,
+                    dictionaries: &locators,
+                    output_format: voice.output_format(),
+                })?
+            }
+            Source::Together { second, first, answer, .. } => {
+                let second_id = voice_id(paths, client, second, &mut known)?;
+                let parts = [(id.clone(), first.clone()), (second_id.clone(), answer.clone())];
+                meta.text = first.clone();
+                meta.second_voice = Some(second.label());
+                meta.second_voice_id = Some(second_id);
+                meta.answer = Some(answer.clone());
+                // A conversation takes fewer settings: no style, no speaker boost, no speed.
+                client.converse(&DialogueRequest {
+                    model: &voice.model,
+                    parts: &parts,
+                    stability: voice.stability,
+                    similarity: voice.similarity,
+                    clone_strength: voice.clone_strength,
+                    seed,
+                    language: voice.language.as_deref(),
+                    normalize,
+                    dictionaries: &locators,
+                    output_format: voice.output_format(),
+                })?
+            }
+            Source::Recording { .. } => continue,
+        };
         let key = clip.raw_key();
-        let meta = SpeechMeta { voice: voice.label(), voice_id: id, model: voice.model.clone(), text: text.clone(), alignment: spoken.alignment, cost: spoken.cost, request_id: spoken.request_id };
+        meta.alignment = spoken.alignment;
+        meta.normalized = spoken.normalized;
+        meta.segments = spoken.segments;
+        meta.cost = spoken.cost;
+        meta.request_id = spoken.request_id;
         std::fs::write(paths.speech().join(format!("{key}.json")), serde_json::to_string(&meta)?)?;
         // The sound is written last: its presence is what marks the piece as recorded.
         std::fs::write(paths.speech().join(format!("{key}.mp3")), &spoken.audio)?;
         done.pieces += 1;
-        done.letters += letters(text);
+        done.letters += n;
         done.credits += spoken.cost.unwrap_or(expected);
         match spoken.cost {
-            Some(cost) => log::info!("recorded {} letters with voice \"{}\" and model {}: {cost} credits", letters(text), voice.label(), voice.model),
-            None => log::info!("recorded {} letters with voice \"{}\" and model {}", letters(text), voice.label(), voice.model),
+            Some(cost) => log::info!("recorded {n} letters with voice \"{}\" and model {}: {cost} credits", clip.source.label(), voice.model),
+            None => log::info!("recorded {n} letters with voice \"{}\" and model {}", clip.source.label(), voice.model),
         }
         if !on_done(i + 1, todo.len()) {
             return Err(Error::Cancelled);
@@ -940,6 +1148,77 @@ fn raw_line_starts(lines: &[String], sent: usize, alignment: Option<&Alignment>,
     starts
 }
 
+/// Where `needle` first sits in `hay`, looking only from `from` up to `to`.
+fn find_letters(hay: &[char], needle: &[char], from: usize, to: usize) -> Option<usize> {
+    let to = to.min(hay.len());
+    if needle.is_empty() || from >= to || to - from < needle.len() {
+        return None;
+    }
+    (from..=to - needle.len()).find(|&at| hay[at..at + needle.len()] == *needle)
+}
+
+/// When each line of a prayer recorded by two voices together starts, in
+/// seconds of the raw recording, and whether every line was found exactly.
+///
+/// ElevenLabs says when each letter is spoken, and where each voice's part lies
+/// among the letters. It does not say what, if anything, sits between the two
+/// parts, or whether a direction's letters are counted. So each half is looked
+/// for by its own words: first inside the part marked as that voice's, then
+/// anywhere after the half before it. A half that cannot be found is spread
+/// evenly across the time its voice speaks. With nothing to go on, the whole
+/// prayer is spread by length, as for a recording that came with no timings.
+fn together_line_starts(lines: &[String], answer_from: usize, alignment: Option<&Alignment>, segments: &[VoiceSegment], raw_start: f32, raw_seconds: f32) -> (Vec<f32>, bool) {
+    let guess = raw_line_starts(lines, 0, None, raw_start, raw_seconds);
+    let answer_from = answer_from.min(lines.len());
+    let timed: Vec<char> = alignment.map(|a| a.text.chars().collect()).unwrap_or_default();
+    let mut out = guess.clone();
+    let mut exact = true;
+    // Letters before this belong to the half already found.
+    let mut used = 0usize;
+    for (part, half) in [&lines[..answer_from], &lines[answer_from..]].into_iter().enumerate() {
+        if half.is_empty() {
+            continue;
+        }
+        let first_line = if part == 0 { 0 } else { answer_from };
+        let words: Vec<char> = half.join(" ").chars().collect();
+        // The stretch ElevenLabs marked as this voice's: among the letters, and in time.
+        let own: Vec<&VoiceSegment> = segments.iter().filter(|s| s.part == part).collect();
+        let letters_marked = own.iter().map(|s| s.first_letter).min().zip(own.iter().map(|s| s.letters_end).max()).filter(|(from, to)| from < to);
+        let time_marked = own.iter().map(|s| s.start).reduce(f32::min).zip(own.iter().map(|s| s.end).reduce(f32::max)).filter(|(from, to)| from < to);
+
+        let found = alignment.and_then(|a| {
+            let n = a.starts.len();
+            let at = if timed.len() == n {
+                letters_marked.filter(|(_, to)| *to <= n).and_then(|(from, to)| find_letters(&timed, &words, from, to)).or_else(|| find_letters(&timed, &words, used, n))
+            } else {
+                // No letters to look through. Trust the marked stretch, and take
+                // the words to be the end of it: a direction, if it is counted, comes first.
+                letters_marked.filter(|(from, to)| *to <= n && to - from >= words.len()).map(|(_, to)| to - words.len())
+            };
+            at.filter(|at| at + words.len() <= n).map(|at| (a, at))
+        });
+        let mut offset = 0usize;
+        for (k, line) in half.iter().enumerate() {
+            let spoken = line.chars().count();
+            match (found, time_marked) {
+                (Some((a, at)), _) => out[first_line + k] = a.starts[at + offset],
+                (None, Some((from, to))) => out[first_line + k] = from + (to - from) * offset as f32 / words.len().max(1) as f32,
+                (None, None) => {}
+            }
+            offset += spoken + 1;
+        }
+        match found {
+            Some((_, at)) => used = at + words.len(),
+            None => exact = false,
+        }
+    }
+    // Times that run backwards mean the pieces did not fit together. Do not show them.
+    if out.windows(2).any(|pair| pair[1] < pair[0]) {
+        return (guess, false);
+    }
+    (out, exact)
+}
+
 /// Bring every piece to its final form. Returns the clips in the same order as
 /// `script.clips`, and a note on how each voice was paced.
 pub fn prepare(paths: &Paths, ffmpeg: &Path, script: &Script, mut on_done: impl FnMut(usize, usize) -> bool) -> Result<(Vec<Clip>, Vec<PaceNote>)> {
@@ -950,6 +1229,8 @@ pub fn prepare(paths: &Paths, ffmpeg: &Path, script: &Script, mut on_done: impl 
         samples: Vec<i16>,
         trim_start: f32,
         alignment: Option<Alignment>,
+        normalized: Option<Alignment>,
+        segments: Vec<VoiceSegment>,
     }
     let n = script.clips.len();
 
@@ -957,16 +1238,16 @@ pub fn prepare(paths: &Paths, ffmpeg: &Path, script: &Script, mut on_done: impl 
     let mut bases: Vec<Base> = Vec::with_capacity(n);
     for clip in &script.clips {
         let key = clip.raw_key();
-        let (source, alignment) = match &clip.source {
-            Source::Speech { voice, .. } => {
+        let (source, meta) = match &clip.source {
+            Source::Recording { file } => (file.clone(), SpeechMeta::default()),
+            Source::Speech { .. } | Source::Together { .. } => {
                 let mp3 = paths.speech().join(format!("{key}.mp3"));
                 if !mp3.is_file() {
-                    return Err(Error::voice(format!("The speech for voice \"{}\" has not been recorded yet.", voice.label())));
+                    return Err(Error::voice(format!("The speech for voice \"{}\" has not been recorded yet.", clip.source.label())));
                 }
                 let meta: SpeechMeta = std::fs::read_to_string(paths.speech().join(format!("{key}.json"))).ok().and_then(|t| serde_json::from_str(&t).ok()).unwrap_or_default();
-                (mp3, meta.alignment)
+                (mp3, meta)
             }
-            Source::Recording { file } => (file.clone(), None),
         };
         let file = paths.clips().join(format!("{key}.pcm"));
         let meta_file = paths.clips().join(format!("{key}.json"));
@@ -983,7 +1264,7 @@ pub fn prepare(paths: &Paths, ffmpeg: &Path, script: &Script, mut on_done: impl 
                 (samples, trim_start)
             }
         };
-        bases.push(Base { key, file, samples, trim_start, alignment });
+        bases.push(Base { key, file, samples, trim_start, alignment: meta.alignment, normalized: meta.normalized, segments: meta.segments });
     }
 
     // Measure each voice's own pace across everything it says in this video. A
@@ -995,10 +1276,12 @@ pub fn prepare(paths: &Paths, ffmpeg: &Path, script: &Script, mut on_done: impl 
     }
     let mut natural: BTreeMap<String, (u64, f32, String)> = BTreeMap::new();
     for (i, (clip, base)) in script.clips.iter().zip(&bases).enumerate() {
-        if let Source::Speech { voice, text } = &clip.source {
+        if let Some(pace) = clip.source.pace() {
             let times = uses[i].max(1);
-            let e = natural.entry(pace_of(voice)).or_insert((0, 0.0, voice.label()));
-            e.0 += letters(text) * times;
+            let e = natural.entry(pace).or_insert((0, 0.0, clip.source.label()));
+            // The letters that are spoken. A direction is sent and paid for, but
+            // nobody says it, so it must not make the voice look faster than it is.
+            e.0 += letters(&clip.lines.join(" ")) * times;
             e.1 += base.samples.len() as f32 / SR as f32 * times as f32;
         }
     }
@@ -1006,10 +1289,10 @@ pub fn prepare(paths: &Paths, ffmpeg: &Path, script: &Script, mut on_done: impl 
     let mut notes: Vec<PaceNote> = Vec::new();
     let mut clips: Vec<Clip> = Vec::with_capacity(n);
     for (i, (clip, base)) in script.clips.iter().zip(&bases).enumerate() {
-        let factor = match (&clip.source, clip.speed) {
+        let factor = match (clip.source.pace(), clip.speed) {
             (_, Speed::Exact(x)) => x,
-            (Source::Speech { voice, .. }, Speed::Pace(p)) => {
-                let (count, seconds, label) = &natural[&pace_of(voice)];
+            (Some(pace), Speed::Pace(p)) => {
+                let (count, seconds, label) = &natural[&pace];
                 let own = *count as f32 / seconds.max(0.1);
                 let speedup = (FIRST_VIDEO_PACE / own).clamp(0.5, 4.0);
                 if !notes.iter().any(|n| &n.voice == label) {
@@ -1017,7 +1300,7 @@ pub fn prepare(paths: &Paths, ffmpeg: &Path, script: &Script, mut on_done: impl 
                 }
                 (speedup * p).clamp(0.5, 4.0)
             }
-            (Source::Recording { .. }, Speed::Pace(p)) => p,
+            (None, Speed::Pace(p)) => p,
         };
         let mut samples = if (factor - 1.0).abs() < 0.005 {
             base.samples.clone()
@@ -1034,11 +1317,19 @@ pub fn prepare(paths: &Paths, ffmpeg: &Path, script: &Script, mut on_done: impl 
         fade_edges(&mut samples);
         let raw_seconds = base.samples.len() as f32 / SR as f32;
         let seconds = samples.len() as f32 / SR as f32;
-        let sent = match &clip.source {
-            Source::Speech { text, .. } => text.chars().count(),
-            Source::Recording { .. } => 0,
+        let raw_starts = match &clip.source {
+            Source::Speech { text, .. } => raw_line_starts(&clip.lines, text.chars().count(), base.alignment.as_ref(), base.trim_start, raw_seconds),
+            Source::Recording { .. } => raw_line_starts(&clip.lines, 0, None, base.trim_start, raw_seconds),
+            Source::Together { answer_from, .. } => {
+                // ElevenLabs does not say which of its two sets of timings the voices' places point into. Try each.
+                let (starts, exact) = together_line_starts(&clip.lines, *answer_from, base.alignment.as_ref(), &base.segments, base.trim_start, raw_seconds);
+                match base.normalized.as_ref().filter(|_| !exact).map(|other| together_line_starts(&clip.lines, *answer_from, Some(other), &base.segments, base.trim_start, raw_seconds)) {
+                    Some((better, true)) => better,
+                    _ => starts,
+                }
+            }
         };
-        let line_starts = raw_line_starts(&clip.lines, sent, base.alignment.as_ref(), base.trim_start, raw_seconds)
+        let line_starts = raw_starts
             .into_iter()
             .map(|t| ((t - base.trim_start) / factor).clamp(0.0, seconds))
             .collect();
@@ -1529,6 +1820,285 @@ mod tests {
         let (cut, start) = trim(&s);
         assert!((start - 0.96).abs() < 0.001, "{start}");
         assert!((cut.len() as f32 / SR as f32 - 0.64).abs() < 0.001);
+    }
+
+    /// The two halves of the Hail Mary, as the leader and the answering voice say them.
+    const LEADS: &str = "Hail Mary, full of grace, the Lord is with thee. Blessed art thou among women, and blessed is the fruit of thy womb, Jesus.";
+    const ANSWERS: &str = "Holy Mary, Mother of God, pray for us sinners, now and at the hour of our death. Amen.";
+
+    /// The Hail Mary pieces of a script: every different recording of it, in order.
+    fn hail_marys(s: &Script) -> Vec<&ClipSpec> {
+        s.clips.iter().filter(|c| c.lines.first().map(String::as_str) == Some("Hail Mary, full of grace,")).collect()
+    }
+
+    #[test]
+    fn two_voices_are_recorded_together_when_asked() {
+        let p = plan(json!({ "prayers": { "mysteries": "luminous" }, "voice": { "respond": "Answer", "together": true } }));
+        let s = script(&p, &[]);
+        let scene = p.scenes.iter().position(|sc| sc.prayer.as_deref() == Some("hailmary")).unwrap();
+        // One piece holds the whole prayer, both voices in it.
+        assert_eq!(s.scenes[scene].len(), 1);
+        let clip = &s.clips[s.scenes[scene][0].clip];
+        assert_eq!((s.scenes[scene][0].first_line, clip.lines.len(), clip.take), (0, 8, 1));
+        let Source::Together { voice, second, first, answer, answer_from } = &clip.source else { panic!("{:?}", clip.source) };
+        assert_eq!((voice.name.as_str(), second.name.as_str(), *answer_from), ("Imperial - Male", "Answer", 4));
+        assert_eq!((first.as_str(), answer.as_str()), (LEADS, ANSWERS));
+        // The Creed has no answering half, so the leader says it alone, as before.
+        let creed = p.scenes.iter().position(|sc| sc.prayer.as_deref() == Some("creed")).unwrap();
+        assert!(matches!(s.clips[s.scenes[creed][0].clip].source, Source::Speech { .. }));
+
+        // Recorded apart, the Our Father, Hail Mary and Glory Be are two pieces each. Together they are one each.
+        let apart = script(&plan(json!({ "prayers": { "mysteries": "luminous" }, "voice": { "respond": "Answer" } })), &[]);
+        assert_eq!((apart.clips.len(), s.clips.len()), (16, 13));
+        // The same letters are sent either way, so it costs the same. It is still
+        // one recording of each prayer, used every time: 53 Hail Marys, one piece.
+        let paths = temp("together");
+        let (est, est_apart) = (estimate(&paths, &s), estimate(&paths, &apart));
+        assert_eq!((est.letters_to_record, est.credits_to_record), (est_apart.letters_to_record, est_apart.credits_to_record));
+        let pair = est.by_voice.iter().find(|v| v.voice == "Imperial - Male with Answer").expect("the pair is named plainly");
+        assert_eq!(pair.pieces, 3);
+        assert_eq!(est.by_voice.len(), 2);
+        let h = heard(&paths, &s);
+        let bead = p.scenes.iter().position(|sc| sc.bead.as_deref() == Some("d1b1")).unwrap();
+        assert_eq!((h[bead][0].voice.as_str(), h[bead][0].uses, h[bead][0].takes, h[bead][0].letters), ("Imperial - Male with Answer", 53, 1, letters(LEADS) + letters(ANSWERS)));
+
+        // Without a second voice there is nobody to record together with: nothing changes, and nothing is said.
+        let alone = script(&plan(json!({ "prayers": { "mysteries": "luminous" }, "voice": { "together": true } })), &[]);
+        assert_eq!(alone.clips, script(&plan(json!({ "prayers": { "mysteries": "luminous" } })), &[]).clips);
+        assert!(alone.cannot_together.is_empty() && s.cannot_together.is_empty());
+    }
+
+    #[test]
+    fn a_prayer_recorded_together_is_filed_under_a_name_of_its_own() {
+        let name = |more: serde_json::Value| -> String {
+            let mut voice = json!({ "respond": "Answer", "together": true });
+            crate::setup::merge(&mut voice, &more);
+            hail_marys(&script(&plan(json!({ "voice": voice })), &[]))[0].raw_key()
+        };
+        // Pinned, like the first video's: a change here would make a person pay again.
+        let plain = name(json!({}));
+        assert_eq!(plain, hash(&json!(["dialogue", 1, "name:imperial - male", "name:answer", "eleven_v4", null, null, LEADS, ANSWERS])));
+        assert_eq!(
+            name(json!({ "stability": 0.5, "seed": 7, "quality": "high" })),
+            hash(&json!(["dialogue", 1, "name:imperial - male", "name:answer", "eleven_v4", 0.5, null, LEADS, ANSWERS, "with", "seed", 7, "quality", "high"]))
+        );
+        // A second take is its own recording.
+        let takes = script(&plan(json!({ "voice": { "respond": "Answer", "together": true, "takes": 2 } })), &[]);
+        let both: Vec<String> = hail_marys(&takes).iter().map(|c| c.raw_key()).collect();
+        assert_eq!(both, [plain.clone(), hash(&json!(["dialogue", 1, "name:imperial - male", "name:answer", "eleven_v4", null, null, LEADS, ANSWERS, "take", 2]))]);
+
+        // What changes the sound changes the name: the voices, the model, stability, similarity, a direction.
+        let mut seen = BTreeSet::from([plain.clone()]);
+        for more in [json!({ "respond": "Other" }), json!({ "name": "Bella" }), json!({ "model": "eleven_v3" }), json!({ "stability": 0.4 }), json!({ "similarity": 0.9 }), json!({ "direction": "reverent" }), json!({ "cloneStrength": 0.5 })] {
+            assert!(seen.insert(name(more.clone())), "{more} did not change where the recording is filed");
+        }
+        // What a conversation does not take changes nothing, so it is not paid for again.
+        assert_eq!(name(json!({ "style": 0.3, "speakerBoost": true, "modelSpeed": 1.1 })), plain);
+
+        // A direction goes in front of each voice's words.
+        let directed = script(&plan(json!({ "voice": { "respond": "Answer", "together": true, "direction": "reverent" } })), &[]);
+        let Source::Together { first, answer, .. } = &hail_marys(&directed)[0].source else { panic!() };
+        assert_eq!((first.as_str(), answer.as_str()), (format!("[reverent] {LEADS}").as_str(), format!("[reverent] {ANSWERS}").as_str()));
+
+        // And the two halves recorded apart are filed exactly where they always were.
+        let apart = script(&plan(json!({ "voice": { "respond": "Answer" } })), &[]);
+        let halves: Vec<String> = hail_marys(&apart).iter().map(|c| c.raw_key()).collect();
+        assert_eq!(halves, [hash(&json!(["speech", 2, "name:imperial - male", "eleven_v4", null, null, null, LEADS]))]);
+        let answer = apart.clips.iter().find(|c| c.lines.first().map(String::as_str) == Some("Holy Mary, Mother of God,")).unwrap();
+        assert_eq!(answer.raw_key(), hash(&json!(["speech", 2, "name:answer", "eleven_v4", null, null, null, ANSWERS])));
+    }
+
+    #[test]
+    fn a_model_that_cannot_record_two_voices_together_records_them_apart_and_says_so() {
+        let paths = temp("cannot-together");
+        keep_models(&paths);
+        for model in ["eleven_multilingual_v2", "eleven_flash_v2_5", "eleven_v4_turbo"] {
+            let asked = script(&plan(json!({ "voice": { "model": model, "respond": "Answer", "together": true } })), &[]);
+            let apart = script(&plan(json!({ "voice": { "model": model, "respond": "Answer" } })), &[]);
+            assert_eq!(asked.clips, apart.clips, "{model}");
+            assert!(asked.clips.iter().all(|c| !matches!(c.source, Source::Together { .. })));
+            assert_eq!(asked.cannot_together, [model]);
+            // Told once, by the model's own name where it is known.
+            let said: Vec<String> = notes(&paths, &asked).into_iter().filter(|n| n.contains("one after the other")).collect();
+            assert_eq!(said.len(), 1, "{said:?}");
+            assert!(apart.cannot_together.is_empty() && notes(&paths, &apart).iter().all(|n| !n.contains("one after the other")));
+        }
+        let said = notes(&paths, &script(&plan(json!({ "voice": { "model": "eleven_multilingual_v2", "respond": "Answer", "together": true } })), &[]));
+        assert!(said[0].contains("With Eleven Multilingual v2,"), "{said:?}");
+        // One part of the video on a model that can, the rest on one that cannot: each goes its own way.
+        let mixed = script(&plan(json!({ "voice": { "model": "eleven_multilingual_v2", "respond": "Answer", "together": true }, "rules": [{ "for": { "prayer": "hailmary" }, "set": { "voice": { "model": "eleven_v3" } } }] })), &[]);
+        assert!(hail_marys(&mixed).iter().all(|c| matches!(c.source, Source::Together { .. })));
+        assert_eq!(mixed.cannot_together, ["eleven_multilingual_v2"]);
+        // What a model can do is told from its name, so a list of models kept before the tool asked is still right.
+        let rates = Rates::kept(&paths);
+        assert!(rates.model("eleven_v3").unwrap().speaks_dialogue && rates.model("eleven_v3").unwrap().takes_direction);
+        assert!(!rates.model("eleven_flash_v2_5").unwrap().speaks_dialogue);
+        let _ = std::fs::remove_dir_all(&paths.data);
+    }
+
+    #[test]
+    fn silence_is_never_paid_for_when_two_record_together() {
+        let p = plan(json!({ "voice": { "respond": "Answer", "together": true, "freshEachTime": true, "dropAfter": 3 } }));
+        let s = script(&p, &[]);
+        assert_eq!(hail_marys(&s).len(), 3 + 5 * 3);
+        assert!(hail_marys(&s).iter().all(|c| matches!(c.source, Source::Together { .. })));
+    }
+
+    fn voices_and_no_speech(server: &mut mockito::Server) -> mockito::Mock {
+        server.mock("GET", "/v2/voices").match_query(mockito::Matcher::Any).with_body(r#"{"voices":[{"voice_id":"imp","name":"Imperial - Male"},{"voice_id":"ans","name":"Answer"}],"has_more":false}"#).create();
+        // Nothing here is said by one voice alone, so the one-voice call is never made.
+        server.mock("POST", mockito::Matcher::Regex("^/v1/text-to-speech/".into())).match_query(mockito::Matcher::Any).with_body(r#"{"audio_base64":"AAEC"}"#).expect(0).create()
+    }
+
+    #[test]
+    fn two_voices_together_reach_elevenlabs_as_one_request() {
+        let paths = temp("together-sent");
+        let p = plan(json!({
+            "prayers": { "opening": false, "closing": false, "firstDecade": 1, "lastDecade": 1, "fatima": false },
+            "voice": { "announce": false, "respond": "Answer", "together": true, "stability": 0.5, "style": 0.3, "speakerBoost": true, "seed": 40, "takes": 2, "direction": "reverent", "language": "en" }
+        }));
+        let s = script(&p, &[]);
+        let before = estimate(&paths, &s);
+        // Our Father, Glory Be, and two takes of the Hail Mary.
+        assert_eq!(before.pieces_to_record, 4);
+        let mut server = mockito::Server::new();
+        let alone = voices_and_no_speech(&mut server);
+        let asked = |seed: u32, starts: &str| {
+            mockito::Matcher::AllOf(vec![
+                mockito::Matcher::PartialJson(json!({ "model_id": "eleven_v4", "settings": { "stability": 0.5 }, "seed": seed, "language_code": "en", "inputs": [{ "voice_id": "imp" }, { "voice_id": "ans" }] })),
+                mockito::Matcher::Regex(format!(r#""text":"\[reverent\] {starts}"#)),
+            ])
+        };
+        let dialogue = "/v1/text-to-dialogue/with-timestamps";
+        let cost = |m: mockito::Mock| m.match_query(mockito::Matcher::Any).with_header("character-cost", "7").with_body(r#"{"audio_base64":"AAEC","voice_segments":[]}"#);
+        let our_father = cost(server.mock("POST", dialogue).match_body(asked(40, "Our Father"))).expect(1).create();
+        let glory_be = cost(server.mock("POST", dialogue).match_body(asked(40, "Glory be"))).expect(1).create();
+        let hail_first = cost(server.mock("POST", dialogue).match_body(asked(40, "Hail Mary"))).expect(1).create();
+        // The second take asks with the next seed, so it is a different recording.
+        let hail_second = cost(server.mock("POST", dialogue).match_body(asked(41, "Hail Mary"))).expect(1).create();
+        let client = Client::with_base("k", &server.url()).unwrap();
+
+        let done = record(&paths, &client, &s, Some(before.credits_to_record), |_, _| true).unwrap();
+        for m in [&our_father, &glory_be, &hail_first, &hail_second, &alone] {
+            m.assert();
+        }
+        // ElevenLabs' own count of the cost is the one that is reported.
+        assert_eq!((done.pieces, done.credits, done.letters), (4, 28, before.letters_to_record));
+        // Kept: making it again asks for nothing.
+        assert_eq!(estimate(&paths, &s).pieces_to_record, 0);
+        assert_eq!(record(&paths, &client, &s, None, |_, _| true).unwrap(), Recorded::default());
+
+        // One bead's recording can be thrown away and made again, like any other.
+        let h = heard(&paths, &s);
+        let bead = p.scenes.iter().position(|sc| sc.bead.as_deref() == Some("d1b2")).unwrap();
+        assert_eq!((h[bead][0].voice.as_str(), h[bead][0].take, h[bead][0].takes, h[bead][0].kept), ("Imperial - Male with Answer", 2, 2, true));
+        let gone = forget(&paths, &s, bead).unwrap();
+        assert_eq!((gone.pieces, gone.letters), (1, letters(LEADS) + letters(ANSWERS) + 2 * letters("[reverent] ")));
+        let after = estimate(&paths, &s);
+        assert_eq!((after.pieces_to_record, after.letters_to_record), (1, gone.letters));
+        let _ = std::fs::remove_dir_all(&paths.data);
+    }
+
+    #[test]
+    fn two_voices_together_are_held_to_the_same_two_locks() {
+        let paths = temp("together-locks");
+        let p = plan(json!({ "prayers": { "opening": false, "closing": false, "firstDecade": 1, "lastDecade": 1, "fatima": false }, "voice": { "announce": false, "respond": "Answer", "together": true } }));
+        let s = script(&p, &[]);
+        let agreed = estimate(&paths, &s).credits_to_record;
+        let mut server = mockito::Server::new();
+        voices_and_no_speech(&mut server);
+        // ElevenLabs charges the whole of what was agreed for the first prayer alone.
+        let dear = server
+            .mock("POST", "/v1/text-to-dialogue/with-timestamps")
+            .match_query(mockito::Matcher::Any)
+            .with_header("character-cost", &agreed.to_string())
+            .with_body(r#"{"audio_base64":"AAEC"}"#)
+            .expect(1)
+            .create();
+        let client = Client::with_base("k", &server.url()).unwrap();
+        let err = record(&paths, &client, &s, Some(agreed), |_, _| true).unwrap_err();
+        assert!(matches!(err, Error::NeedsApproval(_)) && err.to_string().contains("charged more than was expected"), "{err}");
+        dear.assert();
+        assert_eq!(estimate(&paths, &s).pieces_to_record, 2, "the one that was paid for is kept");
+        let _ = std::fs::remove_dir_all(&paths.data);
+
+        // A prayer too long for one request is refused before anything is spent,
+        // and never quietly recorded as two halves at a different cost.
+        let paths = temp("together-long");
+        let long = "calm ".repeat(200);
+        let s = script(&plan(json!({ "voice": { "respond": "Answer", "together": true, "direction": long.trim() } })), &[]);
+        let mut server = mockito::Server::new();
+        let alone = voices_and_no_speech(&mut server);
+        let never = server.mock("POST", "/v1/text-to-dialogue/with-timestamps").match_query(mockito::Matcher::Any).with_body(r#"{"audio_base64":"AAEC"}"#).expect(0).create();
+        let client = Client::with_base("k", &server.url()).unwrap();
+        let err = record(&paths, &client, &s, None, |_, _| true).unwrap_err().to_string();
+        assert!(err.contains("2000 letters at most") && err.contains("voice.together"), "{err}");
+        never.assert();
+        alone.assert();
+        // A second voice that is not in the account is caught then too.
+        let s = script(&plan(json!({ "voice": { "respond": "Nobody", "together": true } })), &[]);
+        let err = record(&paths, &client, &s, None, |_, _| true).unwrap_err().to_string();
+        assert!(err.contains("\"Nobody\""), "{err}");
+        never.assert();
+        let _ = std::fs::remove_dir_all(&paths.data);
+    }
+
+    #[test]
+    fn lines_said_by_two_voices_together_are_timed_from_their_own_words() {
+        // Two lines for the leader, two for the answer.
+        let lines: Vec<String> = ["Ab", "Cd", "Ef", "Gh"].map(String::from).to_vec();
+        let timed = |text: &str| -> Alignment {
+            let n = text.chars().count();
+            let at = |from: usize| (from..from + n).map(|i| i as f32 / 10.0).collect::<Vec<f32>>();
+            Alignment { starts: at(0), ends: at(1), text: text.into() }
+        };
+        let marks = |parts: &[(usize, usize, usize)]| -> Vec<VoiceSegment> {
+            parts.iter().map(|&(part, from, to)| VoiceSegment { part, start: from as f32 / 10.0, end: to as f32 / 10.0, first_letter: from, letters_end: to }).collect()
+        };
+        let starts = |a: Option<&Alignment>, segments: &[VoiceSegment]| together_line_starts(&lines, 2, a, segments, 0.0, 2.0);
+        let guess = raw_line_starts(&lines, 0, None, 0.0, 2.0);
+
+        // As ElevenLabs' own example shows it: the two texts run together with nothing between.
+        let plain = timed("Ab CdEf Gh");
+        assert_eq!(starts(Some(&plain), &marks(&[(0, 0, 5), (1, 5, 10)])), (vec![0.0, 0.3, 0.5, 0.8], true));
+        // Something between the two texts.
+        let spaced = timed("Ab Cd Ef Gh");
+        assert_eq!(starts(Some(&spaced), &marks(&[(0, 0, 5), (1, 6, 11)])), (vec![0.0, 0.3, 0.6, 0.9], true));
+        assert_eq!(starts(Some(&spaced), &marks(&[(0, 0, 6), (1, 5, 11)])).0, [0.0, 0.3, 0.6, 0.9]);
+        // A direction's letters are timed too.
+        let directed = timed("[x] Ab Cd[x] Ef Gh");
+        assert_eq!(starts(Some(&directed), &marks(&[(0, 0, 9), (1, 9, 18)])), (vec![0.4, 0.7, 1.3, 1.6], true));
+        // Each voice's part comes as several stretches, one for each line.
+        assert_eq!(starts(Some(&plain), &marks(&[(0, 0, 2), (0, 2, 5), (1, 5, 7), (1, 7, 10)])), (vec![0.0, 0.3, 0.5, 0.8], true));
+        // The places point into some other set of letters, or there are none: the words are still found.
+        assert_eq!(starts(Some(&plain), &marks(&[(0, 0, 9), (1, 9, 18)])), (vec![0.0, 0.3, 0.5, 0.8], true));
+        assert_eq!(starts(Some(&plain), &[]), (vec![0.0, 0.3, 0.5, 0.8], true));
+        // The same words in both halves are not found twice in the same place.
+        let amens: Vec<String> = ["Amen.", "Amen."].map(String::from).to_vec();
+        assert_eq!(together_line_starts(&amens, 1, Some(&timed("Amen.Amen.")), &[], 0.0, 2.0), (vec![0.0, 0.5], true));
+
+        // Timings that came without their letters: trust the marked stretch, words at its end.
+        let bare = |n: usize| Alignment { text: String::new(), ..timed(&"x".repeat(n)) };
+        assert_eq!(starts(Some(&bare(10)), &marks(&[(0, 0, 5), (1, 5, 10)])), (vec![0.0, 0.3, 0.5, 0.8], true));
+        assert_eq!(starts(Some(&bare(18)), &marks(&[(0, 0, 9), (1, 9, 18)])), (vec![0.4, 0.7, 1.3, 1.6], true));
+        // ... and with no marks either, there is nothing to trust.
+        assert_eq!(starts(Some(&bare(10)), &[]), (guess.clone(), false));
+
+        // No letter timings at all, but ElevenLabs said when each voice speaks: spread each half across its own time.
+        let (by_time, exact) = starts(None, &marks(&[(0, 0, 10), (1, 20, 30)]));
+        assert!(!exact);
+        for (got, want) in by_time.iter().zip([0.0, 0.6, 2.0, 2.6]) {
+            assert!((got - want).abs() < 0.001, "{by_time:?}");
+        }
+        // One half found and the other not: the found half is exact, the other goes by its voice's time.
+        let half = timed("Ab Cd?? ??");
+        let (mixed, exact) = starts(Some(&half), &marks(&[(0, 0, 5), (1, 5, 10)]));
+        assert!(!exact && mixed[..2] == [0.0, 0.3] && (mixed[2] - 0.5).abs() < 0.001 && (mixed[3] - 0.8).abs() < 0.001, "{mixed:?}");
+        // Nothing to go on: by length, as for any recording with no timings.
+        assert_eq!(starts(None, &[]), (guess.clone(), false));
+        // Pieces that do not fit together (the answer timed before the leader) are not shown: by length again.
+        let backwards = Alignment { starts: (0..10).rev().map(|i| i as f32 / 10.0).collect(), ends: (0..10).rev().map(|i| i as f32 / 10.0).collect(), text: "Ab CdEf Gh".into() };
+        assert_eq!(starts(Some(&backwards), &[]), (guess, false));
     }
 
     #[test]

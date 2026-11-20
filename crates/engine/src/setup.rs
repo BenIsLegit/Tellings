@@ -330,6 +330,10 @@ pub struct Voice {
     pub recording_speed: f32,
     /// A second voice that answers with the second half of each prayer.
     pub respond: Option<String>,
+    /// With a second voice that answers: record both halves in one go, as one
+    /// conversation, so the answer follows on from the leader. Only Eleven v4
+    /// and v3 can. Kept for that pair of voices and reused, like any recording.
+    pub together: bool,
     /// 0 = the voice says every Hail Mary. 3 = it says the first three of each
     /// decade and then leaves you to say the rest.
     pub drop_after: u32,
@@ -389,6 +393,7 @@ impl Default for Voice {
             announce_recording: None,
             recording_speed: 1.0,
             respond: None,
+            together: false,
             drop_after: 0,
             announce: true,
             turn_every: TurnEvery::default(),

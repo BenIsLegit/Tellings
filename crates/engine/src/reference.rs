@@ -97,6 +97,7 @@ pub const GROUPS: &[Group] = &[
             i("voice.announceRecording", "a sound file", "Your own recording of the mystery being named."),
             i("voice.recordingSpeed", "0.5 to 4", "Speed change for your own recordings. 1 leaves them alone."),
             i("voice.respond", "a voice name", "A second voice that answers with the second half of the Our Father, Hail Mary and Glory Be."),
+            i("voice.together", "true | false", "With a second voice that answers: record both halves in one go, as one conversation, so the answer follows on. Only Eleven v4 and v3 can. It is kept for that pair of voices and reused, like any recording."),
             i("voice.dropAfter", "a number", "0 = the voice says every Hail Mary. 3 = it says the first three of each decade, then leaves the rest to you."),
             i("voice.announce", "true | false", "Say the name of each mystery aloud."),
         ],
@@ -217,6 +218,7 @@ Rules: one setting for part of the video
     --rule \"section=closing: words.size=1.2\"
     --rule \"bead=d3b10: voice.name=Sarah\"
     --rule \"prayer=hailmary: voice.name=Bella + George; voice.takes=3\"
+    --rule \"prayer=hailmary: voice.respond=George; voice.together=true\"
     --rule \"prayer=creed: voice.model=eleven_v3; voice.direction=reverent, unhurried\"
     --rule \"mystery=1: picture.file=pictures/baptism.jpg; picture.credit=Piero della Francesca, The Baptism of Christ, c. 1450\"
 
