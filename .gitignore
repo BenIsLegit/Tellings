@@ -1,0 +1,13 @@
+# Secrets. API keys never go in the repo.
+.env
+.env.*
+
+# Finished videos and build leftovers
+*.mp4
+build/
+
+# Prototype media and working files (kept out on purpose)
+prototype/art/
+prototype/audio/
+prototype/clips/
+prototype/steps.json

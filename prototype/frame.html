@@ -1,0 +1,295 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Rosary video frame</title>
+<style>
+:root {
+  /* One fixed 2076 x 2152 frame (Pixel 9 Pro Fold inner screen). Rosary left, one prayer right. */
+  --ground: #0E1626;
+  --surface: #172138;
+  --ink: #E7ECF5;
+  --muted: #9BA8C0;
+  --line: #34425F;
+  --done: #6F80A6;
+  --brass: #E6B556;
+  --display: "Cardo", "GFS Baskerville", "Crimson Text", Georgia, serif;
+  --body: "Fira Sans", "Source Sans 3", "DejaVu Sans", sans-serif;
+}
+html, body { margin: 0; background: var(--ground); }
+#stage {
+  position: relative;
+  width: 2076px;
+  height: 2152px;
+  overflow: hidden;
+  background: var(--ground);
+  color: var(--ink);
+  font-family: var(--body);
+}
+
+/* Rosary */
+#rosary { position: absolute; left: 60px; top: 230px; width: 1040px; height: 1657px; }
+.chain { fill: none; stroke: var(--line); stroke-width: 1.4; }
+.bead .dot { fill: var(--ground); stroke: var(--ink); stroke-width: 1.3; }
+.bead.done .dot { fill: var(--done); stroke: var(--done); }
+.bead.now .dot { fill: var(--brass); stroke: var(--brass); }
+.bead .glow { fill: var(--brass); opacity: 0; }
+.bead .halo { fill: none; stroke: var(--brass); stroke-width: 1.6; opacity: 0; }
+.bead.now .glow { opacity: .16; }
+.bead.now .halo { opacity: .9; }
+.bead.cross .halo { stroke-width: 7; stroke-linejoin: round; opacity: 0; }
+.bead.cross.now .halo { opacity: .35; }
+.bead .inlay { fill: none; stroke: var(--ink); stroke-width: 1.4; stroke-linecap: round; }
+.bead.done .inlay, .bead.now .inlay { stroke: var(--ground); }
+.bead.gap .dot { opacity: 0; }
+.bead.gap.now .dot { opacity: 1; }
+
+/* Painting inside the loop */
+#art {
+  position: absolute;
+  left: 185px;
+  top: 355px;
+  width: 790px;
+  height: 790px;
+  border-radius: 50%;
+  overflow: hidden;
+  background: var(--surface);
+  box-shadow: 0 0 0 3px var(--line);
+}
+#art img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; display: block; visibility: hidden; }
+#art img.on { visibility: visible; }
+.credit { position: absolute; left: 80px; bottom: 122px; margin: 0; font-size: 34px; color: var(--muted); max-width: 1300px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+.loopcenter {
+  position: absolute;
+  left: 580px;
+  top: 750px;
+  width: 600px;
+  transform: translate(-50%, -50%);
+  display: grid;
+  gap: 18px;
+  justify-items: center;
+  text-align: center;
+}
+.loopcenter p { margin: 0; }
+.lc-set { font-size: 34px; letter-spacing: .16em; text-transform: uppercase; color: var(--muted); }
+.lc-num { font-family: var(--display); font-size: 200px; line-height: .95; }
+.lc-name { font-family: var(--display); font-size: 72px; line-height: 1.16; text-wrap: balance; }
+
+/* Prayer column */
+#col {
+  position: absolute;
+  left: 1180px;
+  top: 250px;
+  width: 816px;
+  height: 1700px;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  gap: 36px;
+}
+#col > * { flex: none; margin: 0; }
+.where { font-size: 46px; line-height: 1.3; color: var(--muted); }
+#title { font-family: var(--display); font-weight: 400; font-size: 128px; line-height: 1.02; text-wrap: balance; }
+.pips { display: flex; gap: 14px; }
+.pip { width: 36px; height: 36px; border-radius: 50%; border: 4px solid var(--ink); box-sizing: border-box; }
+.pip.done { background: var(--done); border-color: var(--done); }
+.pip.now { background: var(--brass); border-color: var(--brass); }
+.tag { align-self: flex-start; font-size: 38px; line-height: 1.3; color: var(--muted); border: 3px solid var(--line); border-radius: 28px; padding: 10px 28px; }
+.announce { border-left: 8px solid var(--brass); padding: 4px 0 6px 32px; display: grid; gap: 10px; }
+.announce p { margin: 0; }
+.announce .small { font-size: 40px; color: var(--muted); }
+.announce .say { font-family: var(--display); font-size: 66px; line-height: 1.16; text-wrap: balance; }
+#prayer { font-size: 78px; line-height: 1.38; display: grid; gap: .1em; }
+#prayer span { display: block; padding-left: 1.1em; text-indent: -1.1em; }
+.hint { font-size: 42px; line-height: 1.3; color: var(--muted); }
+[hidden] { display: none !important; }
+
+/* Footer */
+.count { position: absolute; right: 80px; bottom: 122px; margin: 0; font-size: 36px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.track { position: absolute; left: 80px; right: 80px; bottom: 92px; height: 6px; border-radius: 3px; background: var(--line); }
+.track i { display: block; height: 100%; border-radius: 3px; background: var(--muted); width: 0; }
+</style>
+</head>
+<body>
+<div id="stage">
+  <svg id="rosary" viewBox="30 10 300 478" aria-hidden="true"></svg>
+  <div id="art" hidden></div>
+  <div class="loopcenter" id="loopcenter">
+    <p class="lc-set" id="lc-set"></p>
+    <p class="lc-num" id="lc-num"></p>
+    <p class="lc-name" id="lc-name"></p>
+  </div>
+
+  <div id="col">
+    <p class="where" id="where"></p>
+    <h1 id="title"></h1>
+    <div class="pips" id="pips" hidden></div>
+    <p class="tag" id="tag" hidden></p>
+    <div class="announce" id="announce" hidden></div>
+    <p id="prayer"></p>
+    <p class="hint" id="hint" hidden></p>
+  </div>
+
+  <p class="credit" id="credit"></p>
+  <p class="count" id="count"></p>
+  <div class="track"><i id="fill"></i></div>
+</div>
+
+<script src="core.js"></script>
+<script src="art.js"></script>
+<script>
+const steps = buildSteps();
+const firstStepOf = {};
+steps.forEach(function (st, i) { if (!(st.bead in firstStepOf)) firstStepOf[st.bead] = i; });
+const SET_DAYS = { joyful: "Mondays and Saturdays", sorrowful: "Tuesdays and Fridays", glorious: "Wednesdays and Sundays", luminous: "Thursdays" };
+const $ = function (id) { return document.getElementById(id); };
+
+function drawRosary() {
+  const P = layout().P;
+  let h = '<circle class="chain" cx="180" cy="160" r="135"/><line class="chain" x1="180" y1="295" x2="180" y2="418"/>';
+  Object.keys(P).forEach(function (id) {
+    const p = P[id];
+    if (p.kind === "small" || p.kind === "big") {
+      const r = p.kind === "small" ? 5 : 7.5;
+      h += '<g class="bead" data-bead="' + id + '">' +
+        '<circle class="glow" cx="' + p.x + '" cy="' + p.y + '" r="' + (r + 9) + '"/>' +
+        '<circle class="halo" cx="' + p.x + '" cy="' + p.y + '" r="' + (r + 4.5) + '"/>' +
+        '<circle class="dot" cx="' + p.x + '" cy="' + p.y + '" r="' + r + '"/></g>';
+    } else if (p.kind === "gap") {
+      h += '<g class="bead gap" data-bead="' + id + '">' +
+        '<circle class="glow" cx="' + p.x + '" cy="' + p.y + '" r="12"/>' +
+        '<circle class="halo" cx="' + p.x + '" cy="' + p.y + '" r="7.5"/>' +
+        '<rect class="dot" x="' + (p.x - 3) + '" y="' + (p.y - 3) + '" width="6" height="6" transform="rotate(45 ' + p.x + ' ' + p.y + ')"/></g>';
+    } else if (p.kind === "medal") {
+      h += '<g class="bead medal" data-bead="medal">' +
+        '<circle class="glow" cx="' + p.x + '" cy="' + p.y + '" r="22"/>' +
+        '<circle class="halo" cx="' + p.x + '" cy="' + p.y + '" r="16.5"/>' +
+        '<circle class="dot" cx="' + p.x + '" cy="' + p.y + '" r="12"/>' +
+        '<path class="inlay" d="M' + p.x + ' ' + (p.y - 6.5) + 'V' + (p.y + 6.5) + 'M' + (p.x - 6.5) + ' ' + p.y + 'H' + (p.x + 6.5) + '"/></g>';
+    } else if (p.kind === "cross") {
+      const d = "M176 416H184V430H198V438H184V474H176V438H162V430H176Z";
+      h += '<g class="bead cross" data-bead="cross">' +
+        '<path class="halo" d="' + d + '"/>' +
+        '<path class="dot" d="' + d + '"/></g>';
+    }
+  });
+  $("rosary").innerHTML = h;
+}
+
+// One <img> per painting, all loaded up front so a scene change never waits on a file.
+const ART = window.ART || {};
+const artReady = [];
+Object.keys(ART).forEach(function (setKey) {
+  ART[setKey].forEach(function (a, k) {
+    if (!a) return;
+    const img = new Image();
+    img.id = "art-" + setKey + "-" + (k + 1);
+    img.style.objectPosition = a.pos || "50% 50%";
+    if (a.zoom) { img.style.transform = "scale(" + a.zoom + ")"; img.style.transformOrigin = a.pos || "50% 50%"; }
+    img.src = a.src;
+    artReady.push(img.decode());
+    $("art").appendChild(img);
+  });
+});
+window.ready = Promise.all(artReady);
+
+function fit() {
+  const col = $("col"), p = $("prayer");
+  let f = 78;
+  p.style.fontSize = f + "px";
+  while (f > 40 && col.scrollHeight > col.clientHeight) { f -= 2; p.style.fontSize = f + "px"; }
+  return f;
+}
+
+// scene: { kind: "intro" | "step" | "outro", i, set }
+function show(scene) {
+  const set = SETS[scene.set];
+  const st = scene.kind === "step" ? steps[scene.i] : null;
+
+  document.querySelectorAll("#rosary .bead").forEach(function (g) {
+    const id = g.getAttribute("data-bead");
+    const now = !!st && st.bead === id;
+    const done = scene.kind === "outro" || (!!st && firstStepOf[id] < scene.i);
+    g.classList.toggle("now", now);
+    g.classList.toggle("done", !now && done);
+  });
+
+  // Painting for this decade, if one was supplied; otherwise the loop holds text.
+  const art = st && st.phase === "decade" && ART[scene.set] ? ART[scene.set][st.decade - 1] : null;
+  document.querySelectorAll("#art img").forEach(function (img) {
+    img.classList.toggle("on", !!art && img.id === "art-" + scene.set + "-" + st.decade);
+  });
+  $("art").hidden = !art;
+  $("loopcenter").hidden = !!art;
+  $("credit").textContent = art ? art.credit : "";
+
+  const lcNum = $("lc-num"), lcName = $("lc-name");
+  $("lc-set").textContent = set.name + " Mysteries";
+  if (st && st.phase === "decade") {
+    lcNum.hidden = false;
+    lcNum.textContent = ROMAN[st.decade - 1];
+    lcName.textContent = set.items[st.decade - 1].name;
+  } else {
+    lcNum.hidden = true;
+    lcName.textContent = scene.kind === "intro" ? "Prayed on " + SET_DAYS[scene.set]
+      : scene.kind === "outro" ? "Finished"
+      : st.phase === "open" ? "Opening prayers" : "Closing prayers";
+  }
+
+  const where = $("where"), title = $("title"), pips = $("pips"), tag = $("tag"), ann = $("announce"), prayer = $("prayer"), hint = $("hint");
+  pips.hidden = true; tag.hidden = true; ann.hidden = true; hint.hidden = true;
+  pips.textContent = ""; ann.textContent = ""; prayer.textContent = "";
+  const addLines = function (lines) {
+    lines.forEach(function (text) { const s = document.createElement("span"); s.textContent = text; prayer.appendChild(s); });
+  };
+
+  if (scene.kind === "intro") {
+    where.textContent = set.name + " Mysteries";
+    title.textContent = "The Holy Rosary";
+    addLines(["Follow the gold bead.", "Pray along with the voice."]);
+    $("count").textContent = steps.length + " prayers";
+    $("fill").style.width = "0%";
+  } else if (scene.kind === "outro") {
+    where.textContent = "Finished";
+    title.textContent = "Amen.";
+    addLines(["That is the whole rosary."]);
+    $("count").textContent = "All " + steps.length + " prayers said";
+    $("fill").style.width = "100%";
+  } else {
+    const pr = PRAYERS[st.prayer];
+    where.textContent = (st.decade ? "Decade " + st.decade + " · " : "") + st.where;
+    title.textContent = pr.title;
+    if (st.pip) {
+      pips.hidden = false;
+      for (let k = 1; k <= st.pip[1]; k++) {
+        const dot = document.createElement("span");
+        dot.className = "pip" + (k < st.pip[0] ? " done" : k === st.pip[0] ? " now" : "");
+        pips.appendChild(dot);
+      }
+    }
+    if (st.optional) { tag.hidden = false; tag.textContent = st.optional; }
+    if (st.phase === "decade") {
+      const m = set.items[st.decade - 1];
+      ann.hidden = false;
+      const lead = document.createElement("p");
+      lead.className = "small";
+      lead.textContent = "The " + ORDINAL[st.decade - 1] + " " + set.name + " Mystery";
+      const say = document.createElement("p");
+      say.className = "say";
+      say.textContent = m.name;
+      ann.appendChild(lead); ann.appendChild(say);
+    }
+    addLines(pr.lines);
+    if (st.hint) { hint.hidden = false; hint.textContent = st.hint; }
+    $("count").textContent = "Prayer " + (scene.i + 1) + " of " + steps.length;
+    $("fill").style.width = (100 * (scene.i + 1) / steps.length).toFixed(2) + "%";
+  }
+  return fit();
+}
+
+drawRosary();
+show({ kind: "intro", set: "luminous" });
+</script>
+</body>
+</html>
