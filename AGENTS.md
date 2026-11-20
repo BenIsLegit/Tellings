@@ -46,6 +46,7 @@ On Windows run `.\pvc.bat`. On macOS or Linux run `./pvc`. The first run builds 
 --voice "Name"                           a voice in the person's ElevenLabs account
 --voice "Bella + George"                 several voices take turns
 --takes 5                                five recordings of each prayer take turns
+--model eleven_v4                        the ElevenLabs model that speaks (see pvc models)
 --no-voice                               words on screen only, no credits
 --screen tv-1080p                        see pvc options for the sizes
 --to "C:\some\folder"                    where the files go
@@ -81,6 +82,27 @@ One recording of the Hail Mary played 53 times sounds stamped out. These setting
 
 If one recording came out wrong, `pvc rerecord luminous --scene d1b3` throws away what is heard on that bead. Pass the same setup and changes you make the video with. The next `pvc make` records it afresh and asks for credits as usual.
 
+### The model, and how the voice speaks
+
+`pvc models` lists the ElevenLabs models and what each charges. It is free. The first video used `eleven_multilingual_v2`, and that stays the default.
+
+```
+--model eleven_v4                                       a different model for the whole video
+--rule "prayer=hailmary: voice.model=eleven_flash_v2_5"  ... or for part of it
+--set "voice.direction=reverent, unhurried"             how to say it. Eleven v3 and v4 only
+--set voice.stability=0.4                               ElevenLabs' own controls. See pvc options
+pvc voices "Imperial - Male"                            how that voice is set up at ElevenLabs
+pvc dictionaries                                        pronunciation dictionaries, for voice.dictionary
+```
+
+These are voice settings, so each works for the whole video or in a rule.
+
+**A different model is a different recording.** Change the model, or any setting that changes the sound, and those prayers are recorded again and paid for again. Changing it back is free: the earlier recordings are kept. Run `pvc show` again and ask about the new number.
+
+The cost is letters times the model's price. Most models charge one credit a letter. The Flash and Turbo ones charge half. `pvc show` works it out.
+
+Changing the model the first video uses changes how it sounds. Ask first.
+
 Bead names: `cross`, `p1` to `p5` (the strand, `p1` nearest the cross), `medal`, `d3b10` (decade 3, bead 10), `L2` to `L5` (the big beads in the loop), `g0` to `g5` (the chain, where the Glory Be is said).
 
 ### Useful extras
@@ -91,7 +113,8 @@ pvc rerecord luminous --scene d3b10               throw away that bead's recordi
 pvc save "My Joyful" joyful --voice "Bella"       keep a setup under a name
 pvc make my-joyful                                use it again
 pvc voices                                        the voices in the account (free)
-pvc credits                                       credits left (free)
+pvc models                                        the models, and what each charges (free)
+pvc credits                                       credits left, and when the count starts again (free)
 pvc doctor                                        is FFmpeg, a browser and the key in place?
 ```
 
@@ -132,7 +155,8 @@ A setup is a small JSON file that holds only what differs from the defaults. The
 - **`renderer/frame.js` draws from the plan and decides nothing.** It is a plain script: no imports, no build step. The engine puts it in a page and photographs it with Chrome or Edge, with no window (`frames.rs`, `cdp.rs`). The app's preview loads the same file (`Preview.svelte`).
 - **The window works nothing out.** After every change the editor (`src/lib/stores/editor.svelte.ts`) sends the sparse setup to `setup_look` and shows the plan and the cost that come back.
 - **Sound sets the timing.** Each still is held for as long as its sound lasts. With no voice, the pace settings say how long.
-- **One gate for credits.** `make::look` is free. `make::make` stops with `NeedsApproval` unless the approved number covers the letters still to record. One letter is about one credit.
+- **One gate for credits.** `make::look` is free. `make::make` stops with `NeedsApproval` unless the approved number covers the credits still to spend. That is letters times what each model charges (`Rates` in `speech.rs`, read from the list `speech::models` fetches and keeps for a day). `speech::record` is the second lock: it adds up what ElevenLabs says it charged, and stops before going over the number.
+- **Only `Client::speak` spends.** Every other call to ElevenLabs is a free list or lookup. `speak` tries again only after a "busy" answer, when nothing was recorded. Never retry it after any other failure: a recording may have been made and paid for.
 
 ### What has to stay in step
 
@@ -147,6 +171,8 @@ A setup is a small JSON file that holds only what differs from the defaults. The
 Setups, pictures and recorded speech live outside the repo, in the app's own folder (`%APPDATA%\gg.cathedral.prayer-video-creator` on Windows). The app and `pvc` share it.
 
 Each recording is filed under a hash of the voice, its settings and the exact words (`raw_key` in `speech.rs`). Change what goes into that hash, or one letter of a prayer, and the person pays to record it all again.
+
+A setting added later joins the hash only where a setup uses it (`extras` in `speech.rs`), so everything recorded before it existed is still found. Add a new one the same way: at the end of that list, never as a JSON object (the app and `pvc` can order an object's keys differently), and pin the result in the test beside it.
 
 ### Rules that come from CLAUDE.md
 
@@ -178,7 +204,7 @@ To see a change to the drawing, use `pvc frame` and look at the picture.
 
 To look at the app's window while the person has their own copy open, start a second copy with `PVC_SECOND_WINDOW=1`, its own `PVC_DATA_DIR`, and its own `WEBVIEW2_USER_DATA_FOLDER`. Without the first, the app only shows the window that is already open. Close your copy when you are done. If they started the app with `start.bat`, it rebuilds and restarts by itself each time you change the code.
 
-To test the voice without spending credits, run the stand-in service, `node dev/stand-in-elevenlabs.mjs` (Windows only). The steps are at the top of that file. Always set `PVC_DATA_DIR` to a scratch folder while you do, so stand-in speech is never kept as if it were the person's real voice. Pass `--to` a scratch folder too, or the test video lands in their Videos folder.
+To test the voice without spending credits, run the stand-in service, `node dev/stand-in-elevenlabs.mjs` (Windows only). The steps are at the top of that file. It prints what each request asked for, which is how to see that a setting reached ElevenLabs. Always set `PVC_DATA_DIR` to a scratch folder while you do, so stand-in speech is never kept as if it were the person's real voice. Pass `--to` a scratch folder too, or the test video lands in their Videos folder.
 
 To drive the app's window, start your copy with `WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS=--remote-debugging-port=9347`. Then `pvc dev-shot 9347 script.js --to shot.png` runs a script in the window and takes a picture of it. Every control has a `data-testid`.
 

@@ -63,6 +63,7 @@ Setting any one of those should take seconds and should not disturb the others.
 
 - **Any voice** in your ElevenLabs account: one you cloned, one you designed, or one from its library.
 - **A different voice** at any of the five levels above.
+- **Which ElevenLabs model speaks**, and how: steadier or freer, plain or with direction like "reverent".
 - **Two voices that take turns.** One leads the first half of each prayer and the other answers with the second half, the way a group prays.
 - **Your own recordings** in place of a generated voice.
 - **Speed.**

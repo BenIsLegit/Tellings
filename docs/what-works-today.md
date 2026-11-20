@@ -34,6 +34,9 @@ Every setting has a default. The exact names and choices are in [settings.md](se
 
 - Any voice in your ElevenLabs account, by name. The tool fetches the sound itself.
 - A different voice at any of the five levels.
+- Any ElevenLabs model, picked from a list that shows what each one charges. A different model at any of the five levels.
+- Direction for the voice, like "reverent, unhurried", on the models that take it (Eleven v3 and v4).
+- ElevenLabs' own controls: stability, similarity, style, speaker boost, its own speed, seed, sound quality, language, and pronunciation dictionaries for a word it keeps saying wrong.
 - Two voices that take turns on the Our Father, Hail Mary and Glory Be.
 - Several voices that take turns leading: a new one on every prayer, or one for each decade.
 - Several recordings ("takes") of each prayer that take turns, so repeats sound less alike. Or a new recording every time a prayer is said.
@@ -46,6 +49,7 @@ Every setting has a default. The exact names and choices are in [settings.md](se
 - No voice at all.
 - Background music or chant that you supply.
 - Every recording is made once and kept. Nothing spends credits without a yes that names the number.
+- The number comes from the model's own price, and the making stops before it goes over. Afterwards it says what ElevenLabs really charged.
 
 **The pictures**
 
@@ -104,5 +108,6 @@ Every setting has a default. The exact names and choices are in [settings.md](se
 ## Not checked yet
 
 - **A real ElevenLabs voice.** The voice path was tested against a stand-in service, not a real account. The first real video is the test. Listen to it before trusting it.
+- **The newer models and controls, with real credits.** The lists (models, prices, voices, credits left) were checked against a real ElevenLabs account. Recording with a different model, a direction, a seed, high quality or a dictionary was checked against the stand-in only. Try one short prayer first and listen. A direction is the least sure: if ElevenLabs ever reads it aloud, take it out.
 - **How different two takes sound.** ElevenLabs reads the same words a little differently each time it is asked. The stand-in does not, so takes were checked by count, not by ear. Try a few takes of the Hail Mary before paying for more.
 - **macOS and Linux.** Built and tested on Windows only.

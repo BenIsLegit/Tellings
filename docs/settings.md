@@ -192,6 +192,7 @@ Rules: one setting for part of the video
     --rule "section=closing: words.size=1.2"
     --rule "bead=d3b10: voice.name=Sarah"
     --rule "prayer=hailmary: voice.name=Bella + George; voice.takes=3"
+    --rule "prayer=creed: voice.model=eleven_v4; voice.direction=reverent, unhurried"
     --rule "mystery=1: picture.file=pictures/baptism.jpg; picture.credit=Piero della Francesca, The Baptism of Christ, c. 1450"
 
   where:
