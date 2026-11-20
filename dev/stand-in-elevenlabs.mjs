@@ -2,13 +2,18 @@
 //
 // It answers the calls the tool makes (list voices, models and pronunciation
 // dictionaries, credits left, record speech, record two voices as one
-// conversation). The speech comes from the voices built into Windows, so it
+// conversation, make music). The speech comes from the voices built into Windows, so it
 // sounds nothing like the real thing, but it is real speech at a natural pace:
 // good enough to check timing, pace, pauses and the credit guard.
 //
 // It charges what each model charges (the flash model is half price) and says
 // so the way ElevenLabs does, in a "character-cost" header. It prints what each
 // request asked for, so you can see that a setting reached it.
+//
+// Music is a quiet made-up chord of the length asked. It costs 15 credits a
+// second, and like the real service the stand-in does not say so: the tool has
+// to read the credits before and after. A prompt with "ave maria" in it is
+// refused, the way the real service refuses the name of a song.
 //
 // Windows only. Run it, then point the tool at it in another terminal:
 //
@@ -165,6 +170,23 @@ function converse(inputs) {
   };
 }
 
+// ── music ──
+
+/** Three soft notes that swell and fade: plainly not silence, and plainly not speech. */
+function musicOf(ms) {
+  const count = Math.round((RATE * ms) / 1000);
+  const samples = Buffer.alloc(count * 2);
+  const notes = [220, 277.18, 329.63];
+  for (let i = 0; i < count; i++) {
+    const t = i / RATE;
+    const swell = 0.6 + 0.4 * Math.sin((2 * Math.PI * t) / 8);
+    let v = 0;
+    for (const f of notes) v += Math.sin(2 * Math.PI * f * t);
+    samples.writeInt16LE(Math.round((v / notes.length) * swell * 6000), i * 2);
+  }
+  return wavOf(samples);
+}
+
 http
   .createServer((req, res) => {
     const url = new URL(req.url, "http://x");
@@ -235,6 +257,28 @@ http
         console.log(`recorded conversation ${calls}: voices ${voices}, ${model.model_id}, ${count} letters, ${cost} credits (${credits} so far)  ${JSON.stringify(extras)}`);
         res.writeHead(200, { "content-type": "application/json", "character-cost": String(cost), "request-id": `stand-in-${calls}` });
         res.end(JSON.stringify(converse(inputs)));
+      });
+      return;
+    }
+    if (url.pathname === "/v1/music" && req.method === "POST") {
+      let body = "";
+      req.on("data", (c) => (body += c));
+      req.on("end", () => {
+        const { prompt, music_length_ms, model_id, ...asked } = JSON.parse(body);
+        // The real service refuses the name of a song or an artist, and often offers other words.
+        if (/ave maria/i.test(prompt ?? "")) {
+          console.log(`refused music: the prompt names a song  ${JSON.stringify({ prompt })}`);
+          return send(400, { detail: { status: "bad_prompt", message: "The prompt names a song.", data: { prompt_suggestion: "A slow, tender sacred melody for solo voice and organ" } } });
+        }
+        const ms = Math.min(Math.max(Number(music_length_ms) || 30000, 3000), 600000);
+        const cost = Math.ceil((ms / 1000) * 15);
+        calls += 1;
+        credits += cost;
+        const extras = { format: url.searchParams.get("output_format"), prompt, ...asked };
+        console.log(`made music ${calls}: ${ms / 1000} seconds, ${model_id}, ${cost} credits (${credits} so far)  ${JSON.stringify(extras)}`);
+        // No "character-cost" here: the real service is not known to send one for music.
+        res.writeHead(200, { "content-type": "audio/wav", "song-id": `stand-in-song-${calls}` });
+        res.end(musicOf(ms));
       });
       return;
     }
