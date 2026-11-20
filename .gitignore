@@ -12,6 +12,11 @@ node_modules/
 .svelte-kit/
 .tauri-build-config.json
 /out/
+/build/
+/src-tauri/gen/
+# Phone icons the icon maker writes. This is a desktop app.
+/src-tauri/icons/android/
+/src-tauri/icons/ios/
 
 # Your own pictures and recordings (kept out on purpose)
 /pictures/*

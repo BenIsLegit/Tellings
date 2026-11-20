@@ -1,0 +1,75 @@
+@import "tailwindcss";
+
+@custom-variant dark (&:where(.dark, .dark *));
+
+/*
+  The shared zinc surfaces and ink of the desktop design system.
+
+  The light values are declared as the Tailwind theme so that classes like
+  bg-panel and text-ink exist. Each class reads its CSS variable at run time,
+  so the .dark block below only has to change the variables.
+*/
+@theme static {
+  --color-canvas: #fafaf9;
+  --color-panel: #ffffff;
+  --color-well: #f4f4f5;
+  --color-well-hover: #e4e4e7;
+  --color-edge: #e4e4e7;
+  --color-frame: #d4d4d8;
+
+  --color-ink: #18181b;
+  --color-ink-secondary: #3f3f46;
+  --color-ink-tertiary: #52525b;
+  --color-ink-muted: #71717a;
+  --color-ink-faint: #a1a1aa;
+  --color-ink-ghost: #d4d4d8;
+
+  /* This app's own color: the gold of the bead you are on. */
+  --color-brand: #b7791f;
+  --color-brand-hover: #975a16;
+  --color-brand-light: #d69e2e;
+  --color-on-brand: #ffffff;
+}
+
+.dark {
+  --color-canvas: #09090b;
+  --color-panel: #18181b;
+  --color-well: #27272a;
+  --color-well-hover: #3f3f46;
+  --color-edge: #27272a;
+  --color-frame: #3f3f46;
+
+  --color-ink: #fafafa;
+  --color-ink-secondary: #d4d4d8;
+  --color-ink-tertiary: #a1a1aa;
+  --color-ink-muted: #71717a;
+  --color-ink-faint: #52525b;
+  --color-ink-ghost: #3f3f46;
+
+  --color-brand: #e6b556;
+  --color-brand-hover: #f0c674;
+  --color-brand-light: #f3d28f;
+  --color-on-brand: #1c1404;
+}
+
+html,
+body {
+  height: 100%;
+  background: var(--color-canvas);
+  color: var(--color-ink);
+  font-family: "Segoe UI", system-ui, -apple-system, "Helvetica Neue", sans-serif;
+  -webkit-font-smoothing: antialiased;
+  overflow: hidden;
+  user-select: none;
+}
+
+input,
+textarea {
+  user-select: text;
+}
+
+/* Thin, quiet scrollbars that match the panels. */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--color-frame) transparent;
+}
