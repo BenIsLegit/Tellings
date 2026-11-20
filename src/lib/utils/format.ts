@@ -11,6 +11,13 @@ export function commas(n: number): string {
   return Math.round(n).toLocaleString("en-US");
 }
 
+/** What a model charges, in words: 1 becomes "1 credit a letter", 0.5 "half a credit a letter". */
+export function rateWords(rate: number): string {
+  if (Math.abs(rate - 1) < 0.001) return "1 credit a letter";
+  if (Math.abs(rate - 0.5) < 0.001) return "half a credit a letter";
+  return `${Math.round(rate * 100) / 100} credits a letter`;
+}
+
 export function megabytes(bytes: number): string {
   return `${(bytes / 1_048_576).toFixed(1)} MB`;
 }

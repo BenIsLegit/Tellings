@@ -1,6 +1,13 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { joinVoices, splitVoices } from "./format.ts";
+import { joinVoices, rateWords, splitVoices } from "./format.ts";
+
+test("what a model charges is said in words", () => {
+  assert.equal(rateWords(1), "1 credit a letter");
+  assert.equal(rateWords(0.5), "half a credit a letter");
+  assert.equal(rateWords(2), "2 credits a letter");
+  assert.equal(rateWords(0.3333), "0.33 credits a letter");
+});
 
 test("several voices share one setting and take turns", () => {
   assert.deepEqual(splitVoices("Imperial - Male"), ["Imperial - Male"]);

@@ -3,14 +3,15 @@
   import { api } from "$lib/api";
   import Button from "$lib/components/Button.svelte";
   import Group from "$lib/components/Group.svelte";
+  import ModelPicker from "$lib/components/ModelPicker.svelte";
   import ScopeBar from "$lib/components/ScopeBar.svelte";
   import Setting from "$lib/components/Setting.svelte";
   import VoicePicker from "$lib/components/VoicePicker.svelte";
   import { confirmDialog } from "$lib/stores/confirm";
   import { editor } from "$lib/stores/editor.svelte";
-  import type { Heard } from "$lib/types";
+  import type { Heard, ModelInfo, VoiceInfo } from "$lib/types";
   import { invokeWithToast } from "$lib/utils/errors";
-  import { commas, joinVoices, splitVoices } from "$lib/utils/format";
+  import { commas, joinVoices, rateWords, splitVoices } from "$lib/utils/format";
 
   /** What the voice chooser is open for: the voice, one more to take turns, or the one that answers. */
   let picking = $state<"voice.name" | "voice.respond" | "turn" | null>(null);
@@ -20,6 +21,36 @@
   let names = $derived(splitVoices(editor.valueFor("voice.name", editor.activeTarget)));
   let current = $derived(picking === "voice.respond" ? String(editor.valueFor("voice.respond", editor.activeTarget) ?? "") : picking === "voice.name" ? (names[0] ?? "") : "");
   let fresh = $derived(!!editor.valueFor("voice.freshEachTime", editor.activeTarget));
+
+  // What ElevenLabs offers, and how each voice is set up there. Both are free
+  // to ask and kept for a day. With no key saved there is nothing to show, and
+  // the panel works without them.
+  let pickingModel = $state(false);
+  let models = $state<ModelInfo[]>([]);
+  let voices = $state<VoiceInfo[]>([]);
+  $effect(() => {
+    api
+      .models()
+      .then((list) => {
+        models = list;
+        // What a model charges is now known, so the cost shown may change.
+        if (editor.look?.estimate.ratesGuessed) editor.refresh();
+      })
+      .catch(() => {});
+    api
+      .voices()
+      .then((list) => (voices = list))
+      .catch(() => {});
+  });
+
+  let model = $derived(String(editor.valueFor("voice.model", editor.activeTarget) ?? ""));
+  let modelInfo = $derived(models.find((m) => m.id === model));
+  /** The settings the leading voice has at ElevenLabs: what is used where this setup says nothing. */
+  let own = $derived(voices.find((v) => v.name === names[0])?.settings ?? null);
+
+  /** A control the chosen model does not use is put away, unless it is set, so it can still be put back. */
+  const shows = (path: string, usable: boolean | undefined) => usable !== false || editor.valueFor(path, editor.activeTarget) != null;
+  const ownNote = (v: number | boolean | null | undefined) => (v === null || v === undefined ? "" : ` This voice's own is ${typeof v === "boolean" ? (v ? "on" : "off") : v}.`);
 
   function setNames(list: string[]) {
     if (list.length === 0) editor.resetFor("voice.name", editor.activeTarget);
@@ -41,7 +72,7 @@
   }
 
   async function recordAgain() {
-    const letters = redoable.reduce((n, h) => n + h.letters, 0);
+    const credits = redoable.reduce((n, h) => n + h.credits, 0);
     const one = redoable.length === 1;
     const most = Math.max(...redoable.map((h) => h.uses));
     const ok = await confirmDialog({
@@ -49,7 +80,7 @@
       message:
         (one ? "This recording will be thrown away." : `The ${redoable.length} recordings heard on this bead will be thrown away.`) +
         (most > 1 ? (one ? ` It plays on ${most} beads in this video.` : " Some of them play on other beads too.") : "") +
-        ` Nothing is spent now. The next time you make the video ${one ? "it is" : "they are"} recorded afresh, for about ${commas(letters)} credits.`,
+        ` Nothing is spent now. The next time you make the video ${one ? "it is" : "they are"} recorded afresh, for about ${commas(credits)} credits.`,
       confirmLabel: one ? "Throw it away" : "Throw them away",
       variant: "danger",
     });
@@ -143,12 +174,102 @@
     <Setting path="voice.recordingSpeed" label="Speed of your recordings" kind="number" min={0.5} max={2.5} step={0.05} unit="x" help="1 leaves them as they are. The first video's recordings were played at 1.75." />
   </Group>
 
-  <Group title="Fine tuning" folded testid="voice-fine-group">
+  <Group title="The ElevenLabs model" testid="voice-model-group" note="The model is what turns the words into speech. A prayer recorded with one model is recorded again, and paid for again, with another.">
+    <Setting path="voice.model" label="Model" kind="text" placeholder="eleven_multilingual_v2" />
+    <div class="-mt-1 pb-2">
+      <Button size="sm" testid="voice-model-choose-btn" onclick={() => (pickingModel = true)}>Choose a model…</Button>
+      {#if modelInfo}
+        <p class="mt-1.5 text-xs leading-relaxed text-ink-muted" data-testid="voice-model-info">
+          {modelInfo.name} · {rateWords(modelInfo.creditsPerLetter)}{modelInfo.maxLetters > 0 ? ` · up to ${commas(modelInfo.maxLetters)} letters a prayer` : ""}
+        </p>
+      {:else if models.length > 0}
+        <p class="mt-1.5 text-xs leading-relaxed text-amber-400" data-testid="voice-model-unknown">ElevenLabs does not list this model. Choose one from the list.</p>
+      {/if}
+    </div>
+    {#if shows("voice.direction", modelInfo?.takesDirection)}
+      <Setting
+        path="voice.direction"
+        label="Direction"
+        kind="text"
+        placeholder="reverent, unhurried"
+        help="How to say it. Only Eleven v3 and v4 take direction. The voice does not read these words aloud. They add a few letters to the cost of each prayer."
+      />
+    {/if}
+  </Group>
+
+  <Group title="Fine tuning" folded testid="voice-fine-group" note="ElevenLabs' own controls. Left unset, the voice speaks the way it is set up at ElevenLabs. Changing one means that part is recorded again.">
+    <Setting
+      path="voice.stability"
+      label="Stability"
+      kind="optional-number"
+      min={0}
+      max={1}
+      step={0.05}
+      startAt={own?.stability ?? 0.5}
+      help={"Lower lets one take differ more from the next. Higher is steadier." + ownNote(own?.stability)}
+    />
+    <Setting path="voice.similarity" label="Similarity" kind="optional-number" min={0} max={1} step={0.05} startAt={own?.similarity ?? 0.75} help={"How closely to hold to the voice." + ownNote(own?.similarity)} />
+    {#if shows("voice.style", modelInfo?.canUseStyle)}
+      <Setting path="voice.style" label="Style" kind="optional-number" min={0} max={1} step={0.05} startAt={own?.style ?? 0} help={"How much to play up the voice's style. 0 is the steadiest." + ownNote(own?.style)} />
+    {/if}
+    {#if shows("voice.speakerBoost", modelInfo?.canUseSpeakerBoost)}
+      <Setting path="voice.speakerBoost" label="Speaker boost" kind="optional-toggle" placeholder="Leave it to the voice" help={"Holds closer to the original speaker." + ownNote(own?.speakerBoost)} />
+    {/if}
+    <Setting
+      path="voice.modelSpeed"
+      label="Speed at ElevenLabs"
+      kind="optional-number"
+      min={0.7}
+      max={1.2}
+      step={0.05}
+      startAt={1.1}
+      unit="x"
+      help="How fast ElevenLabs itself speaks. The video still lands on the Speed at the top, so a higher number here means less speeding up afterwards, which can sound cleaner. Eleven v4 has no speed setting."
+    />
     <Setting path="voice.exactSpeedup" label="Exact speed-up" kind="optional-number" min={0.5} max={4} step={0.05} startAt={1.75} unit="x" help="Skips the measuring and speeds the recording up by exactly this much." />
-    <Setting path="voice.stability" label="Stability" kind="optional-number" min={0} max={1} step={0.05} startAt={0.5} help="An ElevenLabs setting. Leave unset to use the voice's own. Lower makes one take differ more from the next." />
-    <Setting path="voice.similarity" label="Similarity" kind="optional-number" min={0} max={1} step={0.05} startAt={0.75} />
-    <Setting path="voice.style" label="Style" kind="optional-number" min={0} max={1} step={0.05} startAt={0} />
-    <Setting path="voice.model" label="ElevenLabs model" kind="text" />
+    <Setting
+      path="voice.seed"
+      label="Seed"
+      kind="optional-number"
+      min={0}
+      max={4294967295}
+      step={1}
+      slider={false}
+      startAt={1}
+      help="The same number asks ElevenLabs for the same recording again, as near as it can. Each take adds one, so takes still differ."
+    />
+    <Setting
+      path="voice.quality"
+      label="Sound quality"
+      kind="select"
+      options={[
+        ["standard", "Standard"],
+        ["high", "High (Creator plan and above)"],
+      ]}
+      help="Standard is the first video."
+    />
+    <Setting path="voice.language" label="Language" kind="text" placeholder="Worked out from the words" help="A language code like en or es, for a model that would otherwise guess. Eleven Multilingual v2 ignores it." />
+    <Setting
+      path="voice.normalize"
+      label="Spell out numbers"
+      kind="select"
+      options={[
+        ["auto", "Let ElevenLabs decide"],
+        ["on", "Always"],
+        ["off", "Never"],
+      ]}
+      help="Whether numbers and short forms are spelled out before they are spoken."
+    />
+    <Setting
+      path="voice.dictionary"
+      label="Pronunciation dictionary"
+      kind="text"
+      placeholder="None"
+      help="The name of a pronunciation dictionary in your ElevenLabs account, for a word the voice keeps saying wrong. Up to three, joined with +."
+    />
+    {#if shows("voice.cloneStrength", model.startsWith("eleven_v4"))}
+      <Setting path="voice.cloneStrength" label="Clone strength" kind="optional-number" min={0} max={1} step={0.05} startAt={0} help="Only for a professional voice clone on Eleven v4: how closely to follow its recordings. ElevenLabs suggests 0." />
+    {/if}
     <Setting path="voice.id" label="Exact voice id" kind="text" placeholder="None. The name is used." help="One exact voice. It leads alone, even when several names are listed above." />
   </Group>
 
@@ -171,7 +292,8 @@
     <div class="mt-2 rounded-md border border-edge bg-canvas p-3 text-sm leading-relaxed" data-testid="voice-cost">
       {#if est.lettersToRecord > 0}
         <p class="font-medium text-ink">New speech to record: {commas(est.lettersToRecord)} letters</p>
-        <p class="text-ink-muted">About {commas(est.lettersToRecord)} ElevenLabs credits. You will be asked before anything is spent.</p>
+        <p class="text-ink-muted">About {commas(est.creditsToRecord)} ElevenLabs credits. You will be asked before anything is spent.</p>
+        {#if est.ratesGuessed}<p class="text-xs text-ink-muted" data-testid="voice-cost-guess">A guess, until ElevenLabs says what this model charges.</p>{/if}
       {:else}
         <p class="font-medium text-ink">Nothing new to record</p>
         <p class="text-ink-muted">{est.lettersKept > 0 ? "Every piece of speech is already recorded and kept." : "This video has no generated voice."}</p>
@@ -179,6 +301,16 @@
     </div>
   {/if}
 </div>
+
+<ModelPicker
+  open={pickingModel}
+  current={model}
+  onclose={() => (pickingModel = false)}
+  onpick={(picked) => {
+    editor.setFor("voice.model", editor.activeTarget, picked.id);
+    pickingModel = false;
+  }}
+/>
 
 <VoicePicker
   open={picking !== null}

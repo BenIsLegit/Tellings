@@ -35,7 +35,7 @@
     path: string;
     label: string;
     help?: string;
-    kind: "toggle" | "number" | "optional-number" | "text" | "select" | "color" | "file";
+    kind: "toggle" | "optional-toggle" | "number" | "optional-number" | "text" | "select" | "color" | "file";
     options?: [string, string][];
     min?: number;
     max?: number;
@@ -96,6 +96,18 @@
     {:else}
       <NumberInput value={Number(value)} {min} {max} {step} {unit} {slider} testid="setting-{id}-input" onchange={set} />
     {/if}
+  {:else if kind === "optional-toggle"}
+    <!-- On, off, or no choice at all. No choice leaves it to whatever would decide otherwise. -->
+    <Select
+      value={value === true ? "on" : value === false ? "off" : "unset"}
+      options={[
+        ["unset", placeholder || "Not set"],
+        ["on", "On"],
+        ["off", "Off"],
+      ]}
+      testid="setting-{id}-select"
+      onchange={(v) => (v === "unset" ? reset() : set(v === "on"))}
+    />
   {:else if kind === "text"}
     <TextInput value={value ?? ""} {placeholder} testid="setting-{id}-input" onchange={setText} />
   {:else if kind === "select"}
