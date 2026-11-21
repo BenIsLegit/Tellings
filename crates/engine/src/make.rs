@@ -386,7 +386,7 @@ pub fn make(req: &Request, on_progress: &mut dyn FnMut(Progress), cancel: &Atomi
             // Music from ElevenLabs: kept from before, or made a moment ago. Its end is joined to its start so it goes round gently.
             None => piece.as_ref().filter(|p| p.is_kept(paths)).map(|p| (music::loopable(&ffmpeg, &p.file(paths), &work.0), setup.music.volume)),
         };
-        let sound = audio::master(&ffmpeg, &timeline, &work.0, music.as_ref().map(|(f, v)| (f.as_path(), *v)), &setup.room)?;
+        let sound = audio::master(&ffmpeg, &timeline, &work.0, music.as_ref().map(|(f, v)| (f.as_path(), *v)))?;
         let chapters = if setup.output.chapters {
             let file = work.0.join("chapters.txt");
             std::fs::write(&file, video::chapters(&plan, &timeline))?;

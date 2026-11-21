@@ -31,7 +31,6 @@ pub struct Setup {
     pub colors: Colors,
     pub screen: Screen,
     pub music: Music,
-    pub room: Room,
     pub output: Output,
     pub rules: Vec<Rule>,
 }
@@ -728,37 +727,6 @@ impl Default for Music {
     }
 }
 
-/// The room the voice is heard in.
-#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Default)]
-#[serde(rename_all = "kebab-case")]
-pub enum RoomKind {
-    /// No room: the voice as it was recorded, as in the first video.
-    #[default]
-    None,
-    /// A small stone chapel. The echo is gone in about a second.
-    Chapel,
-    /// A parish church. The echo lasts two or three seconds.
-    Church,
-    /// A great cathedral. The echo lasts four or five seconds.
-    Cathedral,
-}
-
-/// A room for the voice. It is added to the finished sound, not to each
-/// recording, so it costs no credits and changing it records nothing again.
-#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
-#[serde(default, rename_all = "camelCase", deny_unknown_fields)]
-pub struct Room {
-    pub kind: RoomKind,
-    /// How much of the room is heard, 0 to 1. 1 is an echo as loud as the voice.
-    pub amount: f32,
-}
-
-impl Default for Room {
-    fn default() -> Self {
-        Room { kind: RoomKind::None, amount: 0.3 }
-    }
-}
-
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 #[serde(default, rename_all = "camelCase", deny_unknown_fields)]
 pub struct Output {
@@ -949,12 +917,6 @@ impl Setup {
         }
         if !(0.4..=2.0).contains(&self.beads.size) {
             return Err(Error::setup("beads.size must be between 0.4 and 2."));
-        }
-        if !(0.0..=1.0).contains(&self.room.amount) {
-            return Err(Error::setup(format!(
-                "room.amount must be between 0 and 1. 0 is no echo and 1 is an echo as loud as the voice. It is {}.",
-                self.room.amount
-            )));
         }
         if !(0.5..=5.0).contains(&self.music.minutes) {
             return Err(Error::setup(format!(
@@ -1176,22 +1138,6 @@ pub fn parse_rule(text: &str) -> Result<Rule> {
 mod tests {
     use super::*;
     use serde_json::json;
-
-    #[test]
-    fn a_room_is_off_unless_asked_for() {
-        let s = from_doc(&json!({})).unwrap();
-        assert_eq!((s.room.kind, s.room.amount), (RoomKind::None, 0.3));
-        // Naming a room is enough. How much of it is heard has a default.
-        let s = from_doc(&json!({ "room": { "kind": "church" } })).unwrap();
-        assert_eq!((s.room.kind, s.room.amount), (RoomKind::Church, 0.3));
-        let err = from_doc(&json!({ "room": { "amount": 1.5 } })).unwrap_err().to_string();
-        assert!(err.contains("room.amount must be between 0 and 1"), "{err}");
-        let err = from_doc(&json!({ "room": { "kind": "barn" } })).unwrap_err().to_string();
-        assert!(err.contains("no choice called") && err.contains("cathedral"), "{err}");
-        // A room belongs to the whole video: it is added to the finished sound. A rule cannot set it.
-        let err = from_doc(&json!({ "rules": [{ "for": { "mystery": 1 }, "set": { "room": { "kind": "church" } } }] })).unwrap_err().to_string();
-        assert!(err.contains("belongs to the whole video"), "{err}");
-    }
 
     #[test]
     fn an_empty_setup_is_a_whole_setup() {

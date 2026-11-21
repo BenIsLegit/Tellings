@@ -39,7 +39,6 @@ export interface Setup {
   colors: Record<string, any>;
   screen: Record<string, any>;
   music: Record<string, any>;
-  room: Record<string, any>;
   output: Record<string, any>;
   rules: Rule[];
 }

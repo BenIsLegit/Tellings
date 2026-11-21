@@ -50,7 +50,6 @@ Every setting has a default. The exact names and choices are in [settings.md](se
 - No voice at all.
 - Background music or chant that you supply.
 - Or background music that ElevenLabs makes from your description, like "slow, quiet organ in an empty chapel". It is made once and kept, and it loops under the video with a gentle join. No singing unless you ask for it.
-- A room for the voice: a chapel, a church or a cathedral. The echo rings on into the pauses. It is added to the finished sound, so it costs no credits and nothing is recorded again.
 - Every recording is made once and kept. Nothing spends credits without a yes that names the number.
 - The number comes from the model's own price, and the making stops before it goes over. Afterwards it says what ElevenLabs really charged.
 - One number covers the voice and the music together. The music's part is a rough figure, about 900 credits a minute, because ElevenLabs does not give the price before it makes music. Afterwards the tool reads your credits before and after and says what the music came to.
@@ -120,6 +119,5 @@ Every setting has a default. The exact names and choices are in [settings.md](se
   - **What a refusal looks like.** ElevenLabs refuses a prompt that names a hymn, a song or an artist, and its pages say it offers other words. Whether "Ave Maria" or "Salve Regina" counts as a song title is not known. Whether a refused prompt is charged is not known either. The tool will tell you if your credits went down.
   - **How long it takes.** The tool waits up to fifteen minutes for a piece. ElevenLabs' own tools wait four.
   - **How it sounds, and how the loop sounds.** The join was checked by measuring, not by ear.
-- **How the rooms sound.** They were checked by measuring, not by ear: the echo is there, it fades as fast as each room should, and no timing changes. Listen to one prayer in a room before you make a whole video with it.
 - **How different two takes sound.** ElevenLabs reads the same words a little differently each time it is asked. The stand-in does not, so takes were checked by count, not by ear. Try a few takes of the Hail Mary before paying for more.
 - **macOS and Linux.** Built and tested on Windows only.

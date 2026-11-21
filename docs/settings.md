@@ -170,13 +170,6 @@ Can be set for part of the video with a rule.
 | `music.instrumental` | true \| false | true means no singing. Only for music ElevenLabs makes. |
 | `music.take` | 1 to 99 | Which piece. A new number asks ElevenLabs for a different piece from the same words, and costs again. |
 
-## A room for the voice
-
-| Setting | Choices | What it does |
-| --- | --- | --- |
-| `room.kind` | none \| chapel \| church \| cathedral | Puts the voice in a room, with the echo ringing into the pauses. none is the first video. It is added to the finished sound: no credits, and nothing is recorded again. |
-| `room.amount` | 0 to 1 | How much of the room is heard. 0.3 is a clear echo behind the voice. 1 is an echo as loud as the voice. |
-
 ## What comes out
 
 | Setting | Choices | What it does |

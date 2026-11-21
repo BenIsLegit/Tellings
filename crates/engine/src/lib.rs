@@ -11,7 +11,7 @@
 //! plan     list every scene, pick the narrowest rule for each     (variety: whose turn it is)
 //! speech   record what is missing, bring it to pace      (elevenlabs, secrets)
 //! music    have ElevenLabs make background music, once, if the setup describes some
-//! audio    lay the prayers end to end                     (room: the echo of a chapel or church)
+//! audio    lay the prayers end to end
 //! frames   draw a still for each scene                    (cdp, renderer/frame.js)
 //! video    hold each still for its sound, join, add sound
 //! make     run all of the above, and refuse to spend credits unasked
@@ -30,7 +30,6 @@ pub mod paths;
 pub mod plan;
 pub mod prayers;
 pub mod reference;
-pub mod room;
 pub mod secrets;
 pub mod setup;
 pub mod speech;

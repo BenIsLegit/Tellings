@@ -4,8 +4,6 @@
 
 use crate::error::{Error, Result};
 use crate::plan::{Plan, SceneKind};
-use crate::room;
-use crate::setup::Room;
 use crate::speech::{write_pcm, Clip, PartKind, Script, SR};
 use crate::tools;
 use std::path::{Path, PathBuf};
@@ -155,33 +153,9 @@ fn measured_loudness(ffmpeg: &Path, pcm: &Path) -> Result<f64> {
     Ok(lufs)
 }
 
-/// How to ask this FFmpeg to lay a room's clap over the voice and change
-/// nothing else. Left to itself the filter rescales the clap, which would
-/// turn the voice down, and the way to stop that was renamed along the way.
-fn plain_convolution(ffmpeg: &Path) -> Result<&'static str> {
-    let help = tools::run(tools::command(ffmpeg).args(["-hide_banner", "-h", "filter=afir"]), "FFmpeg (checking it can add a room)")?;
-    let help = String::from_utf8_lossy(&help.stdout);
-    if help.contains("irnorm") {
-        Ok("irnorm=-1:irlink=0")
-    } else if help.contains("gtype") {
-        Ok("gtype=none")
-    } else {
-        Err(Error::tool("This FFmpeg is too old to put the voice in a room. Get a newer FFmpeg, or set the room to none."))
-    }
-}
-
-/// The voice's part of the filter graph when it stands in a room: raise it to
-/// level, lay the room's clap over it, hold the peaks. `clap` is which input
-/// the clap is, and `samples` how long the voice is. The echo rings into the
-/// pauses, but never past the end: the sound stays exactly as long as the picture.
-fn voice_in_room(gain: f64, louder_by: f64, plain: &str, limiter: &str, clap: usize, samples: usize) -> String {
-    format!("[0:a]volume={:.2}dB[dry];[dry][{clap}:a]afir={plain}[wet];[wet]atrim=end_sample={samples},{limiter}", gain - louder_by)
-}
-
 /// Write the finished sound track as a WAV file in `work`.
 /// `music` is a file to play underneath and how loud, 0 to 1.
-/// `room` is the room the voice is put in. With none, the sound is what it always was.
-pub fn master(ffmpeg: &Path, timeline: &Timeline, work: &Path, music: Option<(&Path, f32)>, room: &Room) -> Result<PathBuf> {
+pub fn master(ffmpeg: &Path, timeline: &Timeline, work: &Path, music: Option<(&Path, f32)>) -> Result<PathBuf> {
     std::fs::create_dir_all(work)?;
     let pcm = work.join("voice.pcm");
     write_pcm(&pcm, &timeline.samples)?;
@@ -189,32 +163,16 @@ pub fn master(ffmpeg: &Path, timeline: &Timeline, work: &Path, music: Option<(&P
 
     // Raise the voice to a normal listening level. A limiter holds the few loud peaks under the ceiling.
     let mut voice_filter = String::from("anull");
-    // With a room: the file that holds its clap, and the voice's part of the filter graph.
-    let mut in_room: Option<(PathBuf, String)> = None;
     if timeline.has_sound {
         let lufs = measured_loudness(ffmpeg, &pcm)?;
         if lufs.is_finite() {
             let gain = (TARGET_LUFS - lufs).min(8.0);
-            let limiter = format!("alimiter=limit={:.3}:attack=5:release=60:level=false", 10f64.powf(PEAK_DB / 20.0));
-            voice_filter = format!("volume={gain:.2}dB,{limiter}");
-            if let Some(clap) = room::impulse(room) {
-                let file = work.join("room.f32");
-                std::fs::write(&file, clap.iter().flat_map(|x| x.to_le_bytes()).collect::<Vec<u8>>())?;
-                in_room = Some((file, voice_in_room(gain, room::makes_louder_by(room), plain_convolution(ffmpeg)?, &limiter, 1, timeline.samples.len())));
-            }
+            voice_filter = format!("volume={gain:.2}dB,alimiter=limit={:.3}:attack=5:release=60:level=false", 10f64.powf(PEAK_DB / 20.0));
         }
     }
 
     let mut cmd = tools::command(ffmpeg);
     cmd.args(["-y", "-v", "error", "-f", "s16le", "-ar", &SR.to_string(), "-ac", "1", "-i"]).arg(&pcm);
-    if let Some((clap, _)) = &in_room {
-        cmd.args(["-f", "f32le", "-ar", &SR.to_string(), "-ac", "1", "-i"]).arg(clap);
-    }
-    // The voice's part of the graph, and which input the music is. A room's clap takes a place in the line.
-    let (voice, music_input) = match &in_room {
-        Some((_, graph)) => (graph.clone(), 2),
-        None => (format!("[0:a]{voice_filter}"), 1),
-    };
     match music {
         Some((file, volume)) => {
             let total = timeline.seconds();
@@ -222,8 +180,8 @@ pub fn master(ffmpeg: &Path, timeline: &Timeline, work: &Path, music: Option<(&P
             cmd.args(["-stream_loop", "-1", "-i"]).arg(file).args([
                 "-filter_complex",
                 &format!(
-                    "{voice},pan=stereo|c0=c0|c1=c0[v];\
-                     [{music_input}:a]aresample={SR},aformat=channel_layouts=stereo,volume={:.3},afade=t=in:d=2,afade=t=out:st={fade_out:.3}:d=3[m];\
+                    "[0:a]{voice_filter},pan=stereo|c0=c0|c1=c0[v];\
+                     [1:a]aresample={SR},aformat=channel_layouts=stereo,volume={:.3},afade=t=in:d=2,afade=t=out:st={fade_out:.3}:d=3[m];\
                      [v][m]amix=inputs=2:duration=first:dropout_transition=0:normalize=0[a]",
                     volume.clamp(0.0, 1.0)
                 ),
@@ -235,21 +193,13 @@ pub fn master(ffmpeg: &Path, timeline: &Timeline, work: &Path, music: Option<(&P
                 "2",
             ]);
         }
-        None => match &in_room {
-            Some((_, graph)) => {
-                cmd.args(["-filter_complex", &format!("{graph}[a]"), "-map", "[a]", "-ac", "1"]);
-            }
-            None => {
-                cmd.args(["-af", &voice_filter, "-ac", "1"]);
-            }
-        },
+        None => {
+            cmd.args(["-af", &voice_filter, "-ac", "1"]);
+        }
     }
     cmd.args(["-ar", &SR.to_string(), "-c:a", "pcm_s16le"]).arg(&out);
     tools::run(&mut cmd, "FFmpeg (finishing the sound)")?;
     let _ = std::fs::remove_file(&pcm);
-    if let Some((clap, _)) = &in_room {
-        let _ = std::fs::remove_file(clap);
-    }
     Ok(out)
 }
 
@@ -272,14 +222,6 @@ mod tests {
             .iter()
             .map(|c| Clip { samples: vec![1000; (seconds * SR as f32) as usize], line_starts: (0..c.lines.len()).map(|k| k as f32 * seconds / c.lines.len() as f32).collect() })
             .collect()
-    }
-
-    #[test]
-    fn a_room_goes_between_raising_the_voice_and_holding_its_peaks() {
-        // The voice is turned down by what the echo adds, the clap is the second
-        // input, and the echo is cut off where the voice track ends.
-        let graph = voice_in_room(4.0, 0.37, "irnorm=-1:irlink=0", "alimiter=limit=0.841", 1, 96_000);
-        assert_eq!(graph, "[0:a]volume=3.63dB[dry];[dry][1:a]afir=irnorm=-1:irlink=0[wet];[wet]atrim=end_sample=96000,alimiter=limit=0.841");
     }
 
     #[test]

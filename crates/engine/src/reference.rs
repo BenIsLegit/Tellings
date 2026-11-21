@@ -190,14 +190,6 @@ pub const GROUPS: &[Group] = &[
         ],
     },
     Group {
-        title: "A room for the voice",
-        narrows: false,
-        items: &[
-            i("room.kind", "none | chapel | church | cathedral", "Puts the voice in a room, with the echo ringing into the pauses. none is the first video. It is added to the finished sound: no credits, and nothing is recorded again."),
-            i("room.amount", "0 to 1", "How much of the room is heard. 0.3 is a clear echo behind the voice. 1 is an echo as loud as the voice."),
-        ],
-    },
-    Group {
         title: "What comes out",
         narrows: false,
         items: &[
