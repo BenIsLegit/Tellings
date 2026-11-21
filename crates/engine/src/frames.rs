@@ -106,7 +106,7 @@ pub fn guide_page(plan: &Plan) -> Result<String> {
         }
         short.insert(key, url);
     }
-    let mut html = head(&plan.name);
+    let mut html = head(&plan.title);
     html.push_str(&format!(
         "<script>\nwindow.PLAN = {};\nwindow.PICTURES = {};\nPVC.guide(PLAN, {{ picture: function (f) {{ return PICTURES[f] || ''; }} }});\n</script>\n</body>\n</html>\n",
         script_json(&plan)?,

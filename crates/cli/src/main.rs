@@ -317,7 +317,7 @@ fn run(a: Args) -> Result<i32> {
             }
             let p = &look.plan;
             let (w, h) = (p.stage.width, p.stage.height);
-            println!("{}", p.name);
+            println!("{}", p.title);
             println!("  Mysteries: {}", p.set_name);
             println!("  Prayers:   {}", p.prayer_count);
             println!("  Length:    about {} (a guess until the voice is recorded)", clock(p.seconds));
@@ -398,7 +398,7 @@ fn run(a: Args) -> Result<i32> {
             if a.json {
                 return print_json(&made).map(|_| 0);
             }
-            println!("\nMade: {}  ({} long, took {})", made.name, clock(made.seconds), clock(made.took));
+            println!("\nMade: {}  ({} long, took {})", made.title, clock(made.seconds), clock(made.took));
             for f in &made.files {
                 println!("  {:<9} {}", f.kind, f.path);
             }

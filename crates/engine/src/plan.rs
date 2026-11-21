@@ -5,6 +5,7 @@
 //! the bottom of this file.
 
 use crate::beads::{self, Drawing};
+use crate::elevenlabs::model_words;
 use crate::error::Result;
 use crate::prayers::{self, ORDINAL, ROMAN, VIRTUES};
 use crate::setup::*;
@@ -133,7 +134,12 @@ pub struct Stage {
 #[derive(Serialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
 pub struct Plan {
+    /// The setup's own name, or the mysteries when it has none.
     pub name: String,
+    /// What the video is, said in full: the prayer, the mysteries, the part,
+    /// who speaks and how. The title inside the finished files and, made safe,
+    /// their name. A file name the setup gives replaces it.
+    pub title: String,
     pub set_key: String,
     pub set_name: String,
     pub stage: Stage,
@@ -412,6 +418,103 @@ fn spoken_seconds(lines: &[String], speed: f32) -> f32 {
     letters as f32 / (FIRST_VIDEO_PACE * speed.max(0.1))
 }
 
+/// Which part of the rosary is prayed, when it is not all of it: "Decade 1 + Closing".
+fn part_words(setup: &Setup) -> Option<String> {
+    let p = &setup.prayers;
+    if p.opening && p.closing && p.first_decade == 1 && p.last_decade == 5 {
+        return None;
+    }
+    let mut parts: Vec<String> = Vec::new();
+    if p.opening {
+        parts.push("Opening".into());
+    }
+    parts.push(if p.first_decade == p.last_decade { format!("Decade {}", p.first_decade) } else { format!("Decades {} to {}", p.first_decade, p.last_decade) });
+    if p.closing {
+        parts.push("Closing".into());
+    }
+    Some(parts.join(" + "))
+}
+
+/// Who is heard, and which models speak, as a title says them: "Imperial - Male
+/// with Will", then "Eleven v4". More than three voices are counted, not named.
+fn heard_words(scenes: &[Scene]) -> Vec<String> {
+    fn add(list: &mut Vec<String>, name: &str) {
+        let name = name.trim();
+        if !name.is_empty() && !list.iter().any(|n| n == name) {
+            list.push(name.to_string());
+        }
+    }
+    let (mut lead, mut answer, mut models): (Vec<String>, Vec<String>, Vec<String>) = (Vec::new(), Vec::new(), Vec::new());
+    for s in scenes.iter().filter(|s| s.kind == SceneKind::Prayer && s.voice.on && !s.muted) {
+        if s.voice.recording.as_deref().is_some_and(|r| !r.trim().is_empty()) {
+            add(&mut lead, "own recording");
+            continue;
+        }
+        add(&mut lead, s.speaker.as_deref().unwrap_or(&s.voice.name));
+        if let (Some(_), Some(second)) = (s.response_from, &s.voice.respond) {
+            add(&mut answer, second);
+        }
+        add(&mut models, &model_words(&s.voice.model));
+    }
+    if lead.is_empty() {
+        return vec!["no voice".into()];
+    }
+    let mut all = lead.clone();
+    for second in &answer {
+        add(&mut all, second);
+    }
+    let who = if all.len() > 3 {
+        format!("{} voices", all.len())
+    } else if answer.is_empty() {
+        lead.join(" + ")
+    } else {
+        format!("{} with {}", lead.join(" + "), answer.join(" + "))
+    };
+    let mut out = vec![who];
+    match models.len() {
+        0 => {}
+        1 | 2 => out.push(models.join(" + ")),
+        n => out.push(format!("{n} models")),
+    }
+    out
+}
+
+/// What the video is, said in full, so two videos that differ in the prayer,
+/// the part, the voice, the model or the screen never look alike in a folder
+/// or a player: "The Holy Rosary - Luminous Mysteries - Decade 1 (Imperial -
+/// Male, Eleven v4, 2076x2152)". A file name the setup gives is used as it is.
+fn full_title(setup: &Setup, set_name: &str, scenes: &[Scene], width: u32, height: u32) -> String {
+    if let Some(own) = setup.output.file_name.as_deref().map(str::trim).filter(|n| !n.is_empty()) {
+        return own.to_string();
+    }
+    let mut what: Vec<String> = Vec::new();
+    let mut add = |words: &str| {
+        let words = words.trim();
+        if !words.is_empty() && !what.iter().any(|w| w.eq_ignore_ascii_case(words)) {
+            what.push(words.to_string());
+        }
+    };
+    add(&setup.prayers.title);
+    add(&format!("{set_name} Mysteries"));
+    if let Some(part) = part_words(setup) {
+        add(&part);
+    }
+    // The setup's own name, unless all it does is name a set of mysteries. Those
+    // are said already, and a setup started from "Luminous Mysteries" may have
+    // been turned to another set since.
+    let own = setup.name.trim();
+    let names_a_set = own.eq_ignore_ascii_case("Today's Mysteries") || prayers::SETS.iter().any(|s| own.eq_ignore_ascii_case(&format!("{} Mysteries", s.name)));
+    if !names_a_set {
+        add(own);
+    }
+    let mut how = heard_words(scenes);
+    // The screen matters only when there is a picture to look at.
+    if setup.output.video {
+        how.push(format!("{width}x{height}"));
+    }
+    format!("{} ({})", what.join(" - "), how.join(", "))
+}
+
 pub fn build(setup: &Setup, ctx: &Context) -> Result<Plan> {
     setup.check()?;
     let set = set_info(setup, ctx);
@@ -650,8 +753,10 @@ pub fn build(setup: &Setup, ctx: &Context) -> Result<Plan> {
     }
     let seconds = scenes.iter().map(|s| s.seconds).sum();
     let name = if setup.name.trim().is_empty() { format!("{} Mysteries", set.name) } else { setup.name.trim().to_string() };
+    let title = full_title(setup, &set.name, &scenes, width, height);
     Ok(Plan {
         name,
+        title,
         set_key: set.key,
         set_name: set.name,
         stage: Stage {
@@ -897,5 +1002,37 @@ mod tests {
     fn the_first_video_is_about_thirteen_minutes() {
         let p = plan(json!({ "prayers": { "mysteries": "luminous" } }));
         assert!((740.0..840.0).contains(&p.seconds), "guessed {} seconds", p.seconds);
+    }
+
+    #[test]
+    fn the_title_says_what_the_video_is() {
+        let title = |doc: serde_json::Value| plan(doc).title;
+        // Nothing chosen: today's mysteries (a Thursday), the usual voice, model and screen.
+        assert_eq!(title(json!({})), "The Holy Rosary - Luminous Mysteries (Imperial - Male, Eleven v4, 2076x2152)");
+        // A setup named only for its mysteries adds nothing, even when it has been turned to another set.
+        assert_eq!(title(json!({ "name": "Joyful Mysteries", "prayers": { "mysteries": "joyful" } })), "The Holy Rosary - Joyful Mysteries (Imperial - Male, Eleven v4, 2076x2152)");
+        assert_eq!(title(json!({ "name": "Luminous Mysteries", "prayers": { "mysteries": "joyful" } })), "The Holy Rosary - Joyful Mysteries (Imperial - Male, Eleven v4, 2076x2152)");
+        assert_eq!(title(json!({ "name": "Today's Mysteries" })), "The Holy Rosary - Luminous Mysteries (Imperial - Male, Eleven v4, 2076x2152)");
+        // Part of the rosary, a setup with a name of its own, another model, and no picture so no screen.
+        assert_eq!(
+            title(json!({
+                "name": "For a Walk",
+                "prayers": { "mysteries": "sorrowful", "opening": false, "firstDecade": 2, "lastDecade": 2 },
+                "voice": { "model": "eleven_multilingual_v2" },
+                "output": { "video": false, "audio": true }
+            })),
+            "The Holy Rosary - Sorrowful Mysteries - Decade 2 + Closing - For a Walk (Imperial - Male, Eleven Multilingual v2)"
+        );
+        assert_eq!(title(json!({ "prayers": { "closing": false, "lastDecade": 3 } })), "The Holy Rosary - Luminous Mysteries - Opening + Decades 1 to 3 (Imperial - Male, Eleven v4, 2076x2152)");
+        // Who is heard: voices in turn, one that answers, none at all.
+        assert_eq!(title(json!({ "voice": { "name": "Ann + Ben", "respond": "Cat" } })), "The Holy Rosary - Luminous Mysteries (Ann + Ben with Cat, Eleven v4, 2076x2152)");
+        assert_eq!(title(json!({ "voice": { "on": false }, "screen": { "preset": "tv-1080p" } })), "The Holy Rosary - Luminous Mysteries (no voice, 1920x1080)");
+        // More than three voices are counted. Two models are both named.
+        assert_eq!(
+            title(json!({ "voice": { "name": "Ann + Ben" }, "rules": [{ "for": { "prayer": "hailmary" }, "set": { "voice": { "name": "Cat + Dan", "model": "eleven_flash_v2_5" } } }] })),
+            "The Holy Rosary - Luminous Mysteries (4 voices, Eleven v4 + Eleven Flash v2.5, 2076x2152)"
+        );
+        // A file name the person gives is the title, as it stands.
+        assert_eq!(title(json!({ "output": { "fileName": "  Thursday, for Mum " } })), "Thursday, for Mum");
     }
 }

@@ -93,6 +93,32 @@ pub struct ModelInfo {
     pub languages: Vec<Language>,
 }
 
+/// A model's id in words: "eleven_flash_v2_5" is "Eleven Flash v2.5". Worked
+/// out from the id alone, never from the list ElevenLabs sends, so a file named
+/// after its model is named the same whether or not that list has been fetched.
+pub fn model_words(id: &str) -> String {
+    let is_version = |w: &str| w.len() > 1 && w.starts_with('v') && w[1..].chars().all(|c| c.is_ascii_digit() || c == '.');
+    let mut words: Vec<String> = Vec::new();
+    for part in id.trim().split(['_', '-']).filter(|p| !p.is_empty()) {
+        // "v2" then "5" is version 2.5.
+        if part.chars().all(|c| c.is_ascii_digit()) {
+            if let Some(last) = words.last_mut().filter(|w| is_version(w)) {
+                last.push('.');
+                last.push_str(part);
+                continue;
+            }
+        }
+        if is_version(part) {
+            words.push(part.to_string());
+        } else {
+            let mut letters = part.chars();
+            let first = letters.next().map(|c| c.to_uppercase().collect::<String>()).unwrap_or_default();
+            words.push(format!("{first}{}", letters.as_str()));
+        }
+    }
+    words.join(" ")
+}
+
 /// True for the models that read a tag like `[reverent]` as direction instead
 /// of saying it aloud: Eleven v3, v4 and whatever follows them. The older
 /// models (Multilingual v2, Flash, Turbo) would speak the words. ElevenLabs'
@@ -608,6 +634,16 @@ impl Client {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_model_is_named_in_words_from_its_id() {
+        assert_eq!(model_words("eleven_v4"), "Eleven v4");
+        assert_eq!(model_words("eleven_multilingual_v2"), "Eleven Multilingual v2");
+        assert_eq!(model_words("eleven_flash_v2_5"), "Eleven Flash v2.5");
+        assert_eq!(model_words("eleven_v3_conversational"), "Eleven v3 Conversational");
+        assert_eq!(model_words("eleven_v4_turbo"), "Eleven v4 Turbo");
+        assert_eq!(model_words(""), "");
+    }
 
     #[test]
     fn lists_voices_across_pages() {

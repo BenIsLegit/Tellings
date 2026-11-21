@@ -195,12 +195,17 @@ fn meta_escape(s: &str) -> String {
     out
 }
 
-/// Chapter marks in the form FFmpeg reads: one for each section of the prayer.
-pub fn chapters(plan: &Plan, timeline: &Timeline) -> String {
+/// What a finished file says about itself, in the form FFmpeg reads: its title,
+/// which is what a player shows, and, if wanted, a chapter mark for each
+/// section of the prayer.
+pub fn tags(plan: &Plan, timeline: &Timeline, chapters: bool) -> String {
+    let mut out = format!(";FFMETADATA1\ntitle={}\n", meta_escape(&plan.title));
+    if !chapters {
+        return out;
+    }
     let fps = plan.stage.fps as u64;
     let ms = |frame: u64| frame * 1000 / fps;
     let marks: Vec<(u64, &str)> = plan.scenes.iter().enumerate().filter_map(|(i, s)| s.chapter.as_deref().map(|c| (timeline.scenes[i].start_frame, c))).collect();
-    let mut out = format!(";FFMETADATA1\ntitle={}\n", meta_escape(&plan.name));
     for (j, (start, title)) in marks.iter().enumerate() {
         let end = marks.get(j + 1).map(|m| m.0).unwrap_or(timeline.frames());
         out.push_str(&format!("[CHAPTER]\nTIMEBASE=1/1000\nSTART={}\nEND={}\ntitle={}\n", ms(*start), ms(end), meta_escape(title)));
@@ -246,25 +251,22 @@ pub fn captions(plan: &Plan, timeline: &Timeline) -> String {
     out
 }
 
-/// Lay the sound on the picture and write the finished video.
-pub fn mux(ffmpeg: &Path, picture: &Path, sound: &Path, chapters: Option<&Path>, out: &Path) -> Result<()> {
+/// Lay the sound on the picture and write the finished video. `tags` is the
+/// file `tags` above describes: the title, and the chapters if there are any.
+pub fn mux(ffmpeg: &Path, picture: &Path, sound: &Path, tags: &Path, out: &Path) -> Result<()> {
     let mut cmd = tools::command(ffmpeg);
     cmd.args(["-y", "-hide_banner", "-loglevel", "error", "-i"]).arg(picture).arg("-i").arg(sound);
-    if let Some(c) = chapters {
-        cmd.args(["-f", "ffmetadata", "-i"]).arg(c).args(["-map_metadata", "2"]);
-    }
+    cmd.args(["-f", "ffmetadata", "-i"]).arg(tags).args(["-map_metadata", "2"]);
     cmd.args(["-map", "0:v", "-map", "1:a", "-c:v", "copy", "-c:a", "aac", "-b:a", "160k", "-movflags", "+faststart"]).arg(out);
     tools::run(&mut cmd, "FFmpeg (writing the video)")?;
     Ok(())
 }
 
-/// The sound on its own, with the same chapters.
-pub fn sound_only(ffmpeg: &Path, sound: &Path, chapters: Option<&Path>, out: &Path) -> Result<()> {
+/// The sound on its own, with the same title and chapters.
+pub fn sound_only(ffmpeg: &Path, sound: &Path, tags: &Path, out: &Path) -> Result<()> {
     let mut cmd = tools::command(ffmpeg);
     cmd.args(["-y", "-hide_banner", "-loglevel", "error", "-i"]).arg(sound);
-    if let Some(c) = chapters {
-        cmd.args(["-f", "ffmetadata", "-i"]).arg(c).args(["-map_metadata", "1"]);
-    }
+    cmd.args(["-f", "ffmetadata", "-i"]).arg(tags).args(["-map_metadata", "1"]);
     cmd.args(["-map", "0:a", "-c:a", "aac", "-b:a", "160k", "-movflags", "+faststart"]).arg(out);
     tools::run(&mut cmd, "FFmpeg (writing the sound file)")?;
     Ok(())
@@ -317,7 +319,9 @@ mod tests {
     #[test]
     fn chapters_mark_each_mystery() {
         let (p, t) = made(json!({ "prayers": { "mysteries": "luminous" } }));
-        let c = chapters(&p, &t);
+        let c = tags(&p, &t, true);
+        assert!(c.starts_with(";FFMETADATA1\ntitle=The Holy Rosary - Luminous Mysteries (Imperial - Male, Eleven v4, 2076x2152)\n"), "the title a player shows says what the video is");
+        assert_eq!(tags(&p, &t, false), ";FFMETADATA1\ntitle=The Holy Rosary - Luminous Mysteries (Imperial - Male, Eleven v4, 2076x2152)\n", "with chapters off the title is still written");
         assert_eq!(c.matches("[CHAPTER]").count(), 8, "title, opening, five mysteries, closing");
         assert!(c.contains("title=II. The Wedding at Cana"));
         assert!(c.contains("START=0\n"));

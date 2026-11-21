@@ -16,7 +16,7 @@ use crate::music::{self, MadeMusic, Piece};
 use crate::paths::{file_safe, Paths};
 use crate::plan::{self, Context, Plan};
 use crate::secrets::{self, KeySource};
-use crate::setup::{Mysteries, Setup};
+use crate::setup::Setup;
 use crate::speech::{self, Estimate, Forgotten, Heard, PaceNote};
 use crate::tools;
 use crate::video;
@@ -46,24 +46,25 @@ pub struct Look {
     pub files: Vec<String>,
 }
 
-/// The base name for the files, without an ending.
-fn base_name(setup: &Setup, plan: &Plan) -> String {
-    if let Some(n) = setup.output.file_name.as_deref().filter(|n| !n.trim().is_empty()) {
-        return file_safe(n);
+/// The longest a file's name may be, without its ending. Long enough to say
+/// everything, short enough for any folder.
+const LONGEST_NAME: usize = 150;
+
+/// The base name for the files, without an ending: the video's title, made
+/// safe for a file. The title says the mysteries, the part, the voice, the
+/// model and the screen, so one video does not overwrite a different one.
+fn base_name(plan: &Plan) -> String {
+    let name = file_safe(&plan.title);
+    if name.chars().count() <= LONGEST_NAME {
+        return name;
     }
-    // "Today" changes with the day, so name the file after the mysteries it turned
-    // out to be. Monday's video should not overwrite Sunday's.
-    if setup.prayers.mysteries == Mysteries::Today {
-        let own = setup.name.trim();
-        let set = format!("{} Mysteries", plan.set_name);
-        return file_safe(&if own.is_empty() || own == "Today's Mysteries" { set } else { format!("{set} - {own}") });
-    }
-    file_safe(&plan.name)
+    let cut: String = name.chars().take(LONGEST_NAME).collect();
+    cut.trim_end_matches(|c| matches!(c, ' ' | '-' | '.' | ',' | '+' | '(')).to_string()
 }
 
 fn out_files(paths: &Paths, setup: &Setup, plan: &Plan) -> Vec<(&'static str, PathBuf)> {
     let folder = setup.output.folder.as_deref().filter(|f| !f.trim().is_empty()).map(PathBuf::from).unwrap_or_else(|| paths.output_folder());
-    let base = base_name(setup, plan);
+    let base = base_name(plan);
     let mut v = Vec::new();
     let o = &setup.output;
     if o.video {
@@ -159,6 +160,8 @@ pub struct MadeFile {
 #[serde(rename_all = "camelCase")]
 pub struct Made {
     pub name: String,
+    /// What was made, said in full. The title inside the files.
+    pub title: String,
     pub files: Vec<MadeFile>,
     /// Length of the video, in seconds.
     pub seconds: f32,
@@ -387,13 +390,9 @@ pub fn make(req: &Request, on_progress: &mut dyn FnMut(Progress), cancel: &Atomi
             None => piece.as_ref().filter(|p| p.is_kept(paths)).map(|p| (music::loopable(&ffmpeg, &p.file(paths), &work.0), setup.music.volume)),
         };
         let sound = audio::master(&ffmpeg, &timeline, &work.0, music.as_ref().map(|(f, v)| (f.as_path(), *v)))?;
-        let chapters = if setup.output.chapters {
-            let file = work.0.join("chapters.txt");
-            std::fs::write(&file, video::chapters(&plan, &timeline))?;
-            Some(file)
-        } else {
-            None
-        };
+        // What each file says about itself: its title always, chapter marks if wanted.
+        let tags = work.0.join("tags.txt");
+        std::fs::write(&tags, video::tags(&plan, &timeline, setup.output.chapters))?;
         if stopped() {
             return Err(Error::Cancelled);
         }
@@ -401,7 +400,7 @@ pub fn make(req: &Request, on_progress: &mut dyn FnMut(Progress), cancel: &Atomi
         for (kind, file) in &files {
             match *kind {
                 "sound" => {
-                    video::sound_only(&ffmpeg, &sound, chapters.as_deref(), file)?;
+                    video::sound_only(&ffmpeg, &sound, &tags, file)?;
                     made_files.push(MadeFile { kind: kind.to_string(), path: file.to_string_lossy().into_owned() });
                 }
                 "captions" => {
@@ -430,7 +429,7 @@ pub fn make(req: &Request, on_progress: &mut dyn FnMut(Progress), cancel: &Atomi
                         !stopped()
                     })?;
                     on_progress(Progress { stage: Stage::Finishing, message: "Putting the sound on the video".into(), done: 0, total: 1, fraction: 0.96 });
-                    video::mux(&ffmpeg, &picture, &sound, chapters.as_deref(), file)?;
+                    video::mux(&ffmpeg, &picture, &sound, &tags, file)?;
                     made_files.push(MadeFile { kind: kind.to_string(), path: file.to_string_lossy().into_owned() });
                 }
                 _ => {}
@@ -448,9 +447,10 @@ pub fn make(req: &Request, on_progress: &mut dyn FnMut(Progress), cancel: &Atomi
     on_progress(Progress { stage: Stage::Finishing, message: "Done".into(), done: 1, total: 1, fraction: 1.0 });
     let recorded = spent.recorded;
     let music_charged = spent.music.as_ref().and_then(|m| m.charged).unwrap_or(0);
-    log::info!("made \"{}\": {} file(s), {:.0} s long, {} letters recorded for {} credits", plan.name, made_files.len(), seconds, recorded.letters, recorded.credits);
+    log::info!("made \"{}\": {} file(s), {:.0} s long, {} letters recorded for {} credits", plan.title, made_files.len(), seconds, recorded.letters, recorded.credits);
     Ok(Made {
         name: plan.name.clone(),
+        title: plan.title.clone(),
         files: made_files,
         seconds,
         letters_recorded: recorded.letters,

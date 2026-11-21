@@ -115,7 +115,7 @@ impl Paths {
 pub fn file_safe(name: &str) -> String {
     let mut out = String::new();
     for c in name.trim().chars() {
-        if c.is_alphanumeric() || matches!(c, ' ' | '-' | '_' | '.' | ',' | '\'' | '(' | ')') {
+        if c.is_alphanumeric() || matches!(c, ' ' | '-' | '_' | '.' | ',' | '\'' | '(' | ')' | '+') {
             out.push(c);
         } else {
             out.push('-');
@@ -155,6 +155,11 @@ mod tests {
     fn names_become_safe_files_and_ids() {
         assert_eq!(file_safe("Luminous: the first video?"), "Luminous- the first video");
         assert_eq!(file_safe("  ...  "), "Prayer video");
+        assert_eq!(
+            file_safe("The Holy Rosary - Joyful Mysteries (Ann + Ben, Eleven Flash v2.5, 1920x1080)"),
+            "The Holy Rosary - Joyful Mysteries (Ann + Ben, Eleven Flash v2.5, 1920x1080)",
+            "a title the tool writes is a file name as it stands"
+        );
         assert_eq!(slug("My Joyful (slow)"), "my-joyful-slow");
         assert_eq!(slug("¿?"), "setup");
     }
