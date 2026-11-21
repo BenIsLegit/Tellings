@@ -180,7 +180,7 @@ Can be set for part of the video with a rule.
 | `output.chapters` | true \| false | Chapter marks, so you can jump to a decade. |
 | `output.guide` | true \| false | The tap-through guide: a page you move a bead at a time. |
 | `output.folder` | a folder | Where the files go. Leave out for Videos/Prayer Videos. |
-| `output.fileName` | words | The file name, without the ending. It is also the title inside the file, which a player shows. Leave out for a name that says what the video is: the prayer, the mysteries, the part, the voice, the model and the screen size. |
+| `output.fileName` | words | The file name, without the ending. It is also the title inside the file, which a player shows. Leave out for a name that says what the video is: the day it is made (like 2026-11-20, so files sort by day), the prayer, the mysteries, the part, the voice, the model and the screen size. A name you give is used as it is, with no day added. |
 | `output.quality` | 0 to 51 | Picture quality. Lower is better and bigger. 18 is the first video. |
 
 ## Rules

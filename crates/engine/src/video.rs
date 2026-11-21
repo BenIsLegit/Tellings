@@ -320,8 +320,8 @@ mod tests {
     fn chapters_mark_each_mystery() {
         let (p, t) = made(json!({ "prayers": { "mysteries": "luminous" } }));
         let c = tags(&p, &t, true);
-        assert!(c.starts_with(";FFMETADATA1\ntitle=The Holy Rosary - Luminous Mysteries (Imperial - Male, Eleven v4, 2076x2152)\n"), "the title a player shows says what the video is");
-        assert_eq!(tags(&p, &t, false), ";FFMETADATA1\ntitle=The Holy Rosary - Luminous Mysteries (Imperial - Male, Eleven v4, 2076x2152)\n", "with chapters off the title is still written");
+        assert!(c.starts_with(";FFMETADATA1\ntitle=2026-11-19 The Holy Rosary - Luminous Mysteries (Imperial - Male, Eleven v4, 2076x2152)\n"), "the title a player shows says what the video is");
+        assert_eq!(tags(&p, &t, false), ";FFMETADATA1\ntitle=2026-11-19 The Holy Rosary - Luminous Mysteries (Imperial - Male, Eleven v4, 2076x2152)\n", "with chapters off the title is still written");
         assert_eq!(c.matches("[CHAPTER]").count(), 8, "title, opening, five mysteries, closing");
         assert!(c.contains("title=II. The Wedding at Cana"));
         assert!(c.contains("START=0\n"));

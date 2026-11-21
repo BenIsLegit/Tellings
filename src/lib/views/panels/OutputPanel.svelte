@@ -25,7 +25,7 @@
       label="File name"
       kind="text"
       placeholder="Named for what is in it"
-      help="Leave empty and the name says what the video is: the prayer, the mysteries, the part, the voice, the model and the screen size. The title a player shows is the same."
+      help="Leave empty and the name says what the video is: the day it is made, the prayer, the mysteries, the part, the voice, the model and the screen size. The day comes first, so files sort by day. The title a player shows is the same. A name you type is used as it is, with no day added."
     />
     {#if editor.look?.files.length}
       <div class="rounded-md border border-edge bg-canvas p-3 text-xs leading-relaxed text-ink-muted" data-testid="output-files">

@@ -481,9 +481,11 @@ fn heard_words(scenes: &[Scene]) -> Vec<String> {
 
 /// What the video is, said in full, so two videos that differ in the prayer,
 /// the part, the voice, the model or the screen never look alike in a folder
-/// or a player: "The Holy Rosary - Luminous Mysteries - Decade 1 (Imperial -
-/// Male, Eleven v4, 2076x2152)". A file name the setup gives is used as it is.
-fn full_title(setup: &Setup, set_name: &str, scenes: &[Scene], width: u32, height: u32) -> String {
+/// or a player. The day it is made comes first, year then month then day, so
+/// a folder sorted by name is in the order the videos were made, and a video
+/// made again on a later day does not replace the earlier one.
+/// A file name the setup gives is used as it is, with no day added.
+fn full_title(setup: &Setup, set_name: &str, scenes: &[Scene], width: u32, height: u32, today: chrono::NaiveDate) -> String {
     if let Some(own) = setup.output.file_name.as_deref().map(str::trim).filter(|n| !n.is_empty()) {
         return own.to_string();
     }
@@ -512,7 +514,7 @@ fn full_title(setup: &Setup, set_name: &str, scenes: &[Scene], width: u32, heigh
     if setup.output.video {
         how.push(format!("{width}x{height}"));
     }
-    format!("{} ({})", what.join(" - "), how.join(", "))
+    format!("{} {} ({})", today.format("%Y-%m-%d"), what.join(" - "), how.join(", "))
 }
 
 pub fn build(setup: &Setup, ctx: &Context) -> Result<Plan> {
@@ -753,7 +755,7 @@ pub fn build(setup: &Setup, ctx: &Context) -> Result<Plan> {
     }
     let seconds = scenes.iter().map(|s| s.seconds).sum();
     let name = if setup.name.trim().is_empty() { format!("{} Mysteries", set.name) } else { setup.name.trim().to_string() };
-    let title = full_title(setup, &set.name, &scenes, width, height);
+    let title = full_title(setup, &set.name, &scenes, width, height, ctx.today);
     Ok(Plan {
         name,
         title,
@@ -1008,11 +1010,11 @@ mod tests {
     fn the_title_says_what_the_video_is() {
         let title = |doc: serde_json::Value| plan(doc).title;
         // Nothing chosen: today's mysteries (a Thursday), the usual voice, model and screen.
-        assert_eq!(title(json!({})), "The Holy Rosary - Luminous Mysteries (Imperial - Male, Eleven v4, 2076x2152)");
+        assert_eq!(title(json!({})), "2026-11-19 The Holy Rosary - Luminous Mysteries (Imperial - Male, Eleven v4, 2076x2152)");
         // A setup named only for its mysteries adds nothing, even when it has been turned to another set.
-        assert_eq!(title(json!({ "name": "Joyful Mysteries", "prayers": { "mysteries": "joyful" } })), "The Holy Rosary - Joyful Mysteries (Imperial - Male, Eleven v4, 2076x2152)");
-        assert_eq!(title(json!({ "name": "Luminous Mysteries", "prayers": { "mysteries": "joyful" } })), "The Holy Rosary - Joyful Mysteries (Imperial - Male, Eleven v4, 2076x2152)");
-        assert_eq!(title(json!({ "name": "Today's Mysteries" })), "The Holy Rosary - Luminous Mysteries (Imperial - Male, Eleven v4, 2076x2152)");
+        assert_eq!(title(json!({ "name": "Joyful Mysteries", "prayers": { "mysteries": "joyful" } })), "2026-11-19 The Holy Rosary - Joyful Mysteries (Imperial - Male, Eleven v4, 2076x2152)");
+        assert_eq!(title(json!({ "name": "Luminous Mysteries", "prayers": { "mysteries": "joyful" } })), "2026-11-19 The Holy Rosary - Joyful Mysteries (Imperial - Male, Eleven v4, 2076x2152)");
+        assert_eq!(title(json!({ "name": "Today's Mysteries" })), "2026-11-19 The Holy Rosary - Luminous Mysteries (Imperial - Male, Eleven v4, 2076x2152)");
         // Part of the rosary, a setup with a name of its own, another model, and no picture so no screen.
         assert_eq!(
             title(json!({
@@ -1021,18 +1023,21 @@ mod tests {
                 "voice": { "model": "eleven_multilingual_v2" },
                 "output": { "video": false, "audio": true }
             })),
-            "The Holy Rosary - Sorrowful Mysteries - Decade 2 + Closing - For a Walk (Imperial - Male, Eleven Multilingual v2)"
+            "2026-11-19 The Holy Rosary - Sorrowful Mysteries - Decade 2 + Closing - For a Walk (Imperial - Male, Eleven Multilingual v2)"
         );
-        assert_eq!(title(json!({ "prayers": { "closing": false, "lastDecade": 3 } })), "The Holy Rosary - Luminous Mysteries - Opening + Decades 1 to 3 (Imperial - Male, Eleven v4, 2076x2152)");
+        assert_eq!(title(json!({ "prayers": { "closing": false, "lastDecade": 3 } })), "2026-11-19 The Holy Rosary - Luminous Mysteries - Opening + Decades 1 to 3 (Imperial - Male, Eleven v4, 2076x2152)");
         // Who is heard: voices in turn, one that answers, none at all.
-        assert_eq!(title(json!({ "voice": { "name": "Ann + Ben", "respond": "Cat" } })), "The Holy Rosary - Luminous Mysteries (Ann + Ben with Cat, Eleven v4, 2076x2152)");
-        assert_eq!(title(json!({ "voice": { "on": false }, "screen": { "preset": "tv-1080p" } })), "The Holy Rosary - Luminous Mysteries (no voice, 1920x1080)");
+        assert_eq!(title(json!({ "voice": { "name": "Ann + Ben", "respond": "Cat" } })), "2026-11-19 The Holy Rosary - Luminous Mysteries (Ann + Ben with Cat, Eleven v4, 2076x2152)");
+        assert_eq!(title(json!({ "voice": { "on": false }, "screen": { "preset": "tv-1080p" } })), "2026-11-19 The Holy Rosary - Luminous Mysteries (no voice, 1920x1080)");
         // More than three voices are counted. Two models are both named.
         assert_eq!(
             title(json!({ "voice": { "name": "Ann + Ben" }, "rules": [{ "for": { "prayer": "hailmary" }, "set": { "voice": { "name": "Cat + Dan", "model": "eleven_flash_v2_5" } } }] })),
-            "The Holy Rosary - Luminous Mysteries (4 voices, Eleven v4 + Eleven Flash v2.5, 2076x2152)"
+            "2026-11-19 The Holy Rosary - Luminous Mysteries (4 voices, Eleven v4 + Eleven Flash v2.5, 2076x2152)"
         );
-        // A file name the person gives is the title, as it stands.
+        // The day is the day it is made, not always the 19th.
+        let later = Context { today: chrono::NaiveDate::from_ymd_opt(2027, 1, 3).unwrap(), search: vec![] };
+        assert_eq!(build(&from_doc(&json!({ "prayers": { "mysteries": "joyful" } })).unwrap(), &later).unwrap().title, "2027-01-03 The Holy Rosary - Joyful Mysteries (Imperial - Male, Eleven v4, 2076x2152)");
+        // A file name the person gives is the title, as it stands. No day is added.
         assert_eq!(title(json!({ "output": { "fileName": "  Thursday, for Mum " } })), "Thursday, for Mum");
     }
 }
