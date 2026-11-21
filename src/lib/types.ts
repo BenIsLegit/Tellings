@@ -71,6 +71,8 @@ export interface Scene {
 
 export interface Plan {
   name: string;
+  /** What the video is, said in full. The title inside the files and, made safe, their name. */
+  title: string;
   setKey: string;
   setName: string;
   stage: { width: number; height: number; fps: number };
@@ -156,6 +158,8 @@ export interface Progress {
 
 export interface Made {
   name: string;
+  /** What was made, said in full. */
+  title: string;
   files: { kind: string; path: string }[];
   seconds: number;
   lettersRecorded: number;

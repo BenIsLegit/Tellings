@@ -20,11 +20,18 @@
 
   <Group title="Where it goes" testid="output-where-group">
     <Setting path="output.folder" label="Folder" kind="file" picks="folder" placeholder="Videos / Prayer Videos" />
-    <Setting path="output.fileName" label="File name" kind="text" placeholder="The setup's name" />
+    <Setting
+      path="output.fileName"
+      label="File name"
+      kind="text"
+      placeholder="Named for what is in it"
+      help="Leave empty and the name says what the video is: the prayer, the mysteries, the part, the voice, the model and the screen size. The title a player shows is the same."
+    />
     {#if editor.look?.files.length}
       <div class="rounded-md border border-edge bg-canvas p-3 text-xs leading-relaxed text-ink-muted" data-testid="output-files">
         <p class="mb-1 font-medium text-ink-secondary">Will write</p>
-        {#each editor.look.files as f (f)}<p class="truncate" title={f}>{fileName(f)}</p>{/each}
+        <!-- The end of a name is what tells two videos apart, so a long one wraps and is never cut short. -->
+        {#each editor.look.files as f (f)}<p class="break-words" title={f}>{fileName(f)}</p>{/each}
       </div>
     {/if}
   </Group>

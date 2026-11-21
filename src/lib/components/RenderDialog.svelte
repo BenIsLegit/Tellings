@@ -137,7 +137,8 @@
 
       <div data-testid="render-files">
         <p class="text-sm font-medium text-ink">It will write</p>
-        {#each look.files as f (f)}<p class="truncate text-sm text-ink-muted" title={f}>{f}</p>{/each}
+        <!-- The end of a name is what tells two videos apart, so a long one wraps and is never cut short. -->
+        {#each look.files as f (f)}<p class="break-words text-sm text-ink-muted" title={f}>{f}</p>{/each}
       </div>
 
       {#each look.plan.warnings as w (w)}
@@ -163,7 +164,7 @@
           <li class="flex items-center gap-3 px-4 py-3" data-testid="render-file-item">
             <span class="min-w-0 flex-1">
               <span class="block text-sm font-medium text-ink">{KIND[f.kind] ?? f.kind}</span>
-              <span class="block truncate text-xs text-ink-muted" title={f.path}>{fileName(f.path)}</span>
+              <span class="block break-words text-xs text-ink-muted" title={f.path}>{fileName(f.path)}</span>
             </span>
             <Button size="sm" testid="render-open-btn" onclick={() => invokeWithToast(() => api.openPath(f.path))}><Play size={14} /> Open</Button>
             <Button size="sm" variant="ghost" title="Show in its folder" testid="render-reveal-btn" onclick={() => invokeWithToast(() => api.revealPath(f.path))}><FolderOpen size={14} /></Button>
