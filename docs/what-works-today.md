@@ -90,6 +90,7 @@ Every setting has a default. The exact names and choices are in [settings.md](se
 - Chapters.
 - Captions as a separate file.
 - The tap-through guide.
+- A name that says what each file is: the prayer, the mysteries, the part, the voice, the model and the screen size. Like "The Holy Rosary - Luminous Mysteries - Decade 1 (Imperial - Male, Eleven v4, 2076x2152)". The title a player shows is the same. So two different videos never share a name, and one does not replace the other. Give a file name of your own and it is used instead, for both.
 
 **Saved setups**
 
